@@ -40,6 +40,7 @@ jobs:
         run: >-
           pnpm exec vitest run
           packages/session/session-persistence-jsonl/tests/relocation.spec.ts
+          packages/session/session-persistence-jsonl/tests/relocation-process.spec.ts
           packages/session/session-persistence-jsonl/tests/jsonl.spec.ts
           packages/session/session-persistence-jsonl/tests/lease.spec.ts
           packages/session/session-persistence-jsonl/tests/win32.spec.ts

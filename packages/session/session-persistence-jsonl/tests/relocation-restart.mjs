@@ -100,7 +100,8 @@ async function check(ctx) {
       report.checks = ['relocation acquires the same native lease after the foreign process exits', 'original ID and bytes preserved']
       return
     }
-    const expectedCwd = point === 'after' ? fixture.cwdB : fixture.cwdA
+    const committed = point === 'after' || point === 'rollback-between'
+    const expectedCwd = committed ? fixture.cwdB : fixture.cwdA
     const snapshot = await persistence.stat(fixture.header.id)
     assert.deepEqual(snapshot.header, { ...fixture.header, cwd: expectedCwd })
     assert.equal(digest(await readFile(fixture.log)), fixture.logHash)
@@ -110,7 +111,7 @@ async function check(ctx) {
     await handle.close()
     handle = undefined
     assert.equal((await persistence.list()).filter(value => value.header.id === fixture.header.id).length, 1)
-    if (point === 'after') {
+    if (committed) {
       transaction = await persistence.beginRelocation(fixture.request)
       const result = await transaction.commit()
       assert.equal(result.cwd, fixture.cwdB)
