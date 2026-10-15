@@ -326,6 +326,16 @@ interface SessionPersistenceSnapshot {
 
 后端通过 `supportsRelocation` 声明支持。事务持有排他写入所有权，直到调用方关闭它；请求比较观察到的 cwd 与不透明 revision。[JSONL 后端](../../packages/session/session-persistence-jsonl/README.zh.md#working-directory-transactions)负责存储限制、持久发布、回滚恢复，以及逻辑 cwd 与不可变物理来源的区别。
 
+实时迁移在旧写入句柄、事务和替代句柄之间持续保留同一个内核租约。准备完成后关闭旧句柄，通过 `openWriter()` 打开替代句柄，验证后调用 `complete(writer)`；关闭借用句柄会将所有权归还给事务以便回滚。放弃准备不会关闭仍然打开的原始写入句柄。已退役 Session 的延迟事件不能关闭或修改替代句柄。
+
+```ts type-equiv
+/** Optional live ownership retained through agent teardown. */
+interface SessionRelocationOptions {
+  /** Exact active write handle from this provider; omit for a cold session. */
+  readonly writer?: SessionHandle
+}
+```
+
 ```ts type-equiv
 /** A caller-generated operation identity and the exact observation it may replace. */
 interface SessionRelocationRequest {
@@ -351,15 +361,24 @@ interface SessionRelocationResult {
 ```ts type-equiv
 /**
  * Exclusive ownership retained while the consumer reconciles its related data.
- * A consumer must close the transaction in a finally block. Closing an unpublished
- * transaction leaves its original directory active; closing a committed one retains it.
+ * A consumer must close the transaction in a finally block. A supplied live writer
+ * must close after preparation and before commit. Closing an unpublished transaction
+ * leaves its original directory active; complete transfers the lease to its replacement.
  */
 interface SessionRelocationTransaction {
   /** Publish the prepared working directory; repeats return the same result. */
   commit(): Promise<SessionRelocationResult>
   /** Restore the original placement before releasing exclusive ownership. */
   rollback(): Promise<void>
-  /** Finish recovery bookkeeping and release both process and kernel ownership. */
+  /** Open the committed or restored directory under the transaction's retained lease.
+   * @returns one borrowed write handle; close it before rollback or another open.
+   */
+  openWriter(): Promise<SessionHandle>
+  /** Transfer permanent ownership to the verified replacement handle.
+   * @param writer - the exact borrowed handle returned by openWriter.
+   */
+  complete(writer: SessionHandle): Promise<void>
+  /** Close borrowed writers and release retained ownership unless complete transferred it. */
   close(): Promise<void>
 }
 ```
@@ -395,9 +414,10 @@ Freshness: once an `append` or `flush` resolves, reads started afterwards on thi
  * Prepare a directory change while retaining the session's exclusive write lease.
  * The consumer reconciles related state, commits, and closes in a finally block.
  * @param _request - caller identity and exact expected observation.
+ * @param _options - optional live write ownership retained through teardown.
  * @returns a transaction that retains ownership through commit or rollback.
  */
-beginRelocation(_request: SessionRelocationRequest): Promise<SessionRelocationTransaction>
+beginRelocation(_request: SessionRelocationRequest, _options?: SessionRelocationOptions): Promise<SessionRelocationTransaction>
 
 /**
  * Create a new stored session and take its write ownership.

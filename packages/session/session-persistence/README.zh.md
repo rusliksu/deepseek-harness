@@ -53,6 +53,8 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 
 后端实现 `beginRelocation(request)` 时，通过 `supportsRelocation` 声明支持。默认后端约定拒绝不受支持的迁移。请求使用 UUID 操作标识与精确观察到的目录和 revision。返回的事务在提交或回滚期间持有排他会话所有权，直到调用 `close()`；调用方在 `finally` 块中关闭事务。重复提交的同一请求返回其原结果。[JSONL 后端](../session-persistence-jsonl/README.zh.md#working-directory-transactions)说明格式、大小、恢复和物理位置规则。
 
+向 `beginRelocation` 传入 `{ writer }`，可在代理完成清理期间保留该句柄的内核租约。关闭旧句柄后，使用 `openWriter()` 为已提交或已恢复的目录取得句柄，并在验证后调用 `complete(writer)` 转交永久所有权。在完成前，关闭借用句柄会将所有权归还给事务以便回滚。若尚未开始清理，关闭已放弃的准备事务仍会保留原始句柄可用；已退役 Session 的事件不能到达替代写入句柄。
+
 ### 所有权与可见性
 
 `create` 与 `open(id, 'write')` 取得进程内单写者所有权：在持有者活跃期间第二次以写模式打开会以 `SessionAlreadyOwnedError` 拒绝，对已占用 id 执行 `create` 会以 `SessionAlreadyExistsError` 拒绝，在 `read` 句柄上执行修改会以 `SessionReadOnlyError` 拒绝——一种句柄类型，运行时拒绝。对已关闭句柄的任何操作会以 `SessionHandleClosedError` 拒绝，`SessionOwnershipLostError` 标记写所有权已永久丢失的写句柄（关闭并重新打开）。已创建的会话自 `create` 完成之刻起即可在本进程内被观察到，而后端可以把物理实体化推迟到第一次 `append` 或 `flush`；其他进程只能看到已实体化的会话，一个在崩溃前从未实体化的会话等于从未存在。
@@ -72,6 +74,7 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## 理解实现
 
 <details>

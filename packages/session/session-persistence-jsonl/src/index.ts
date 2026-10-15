@@ -31,11 +31,11 @@ import {
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
 } from '@deepseek-ai/dsh-session-persistence'
-import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
+import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState, type JsonlWriteOwnership } from './storage.ts'
 import { SessionWriteLease } from './lease.ts'
 import { SESSION_FORMAT_VERSION, SessionId as makeSessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
-import type { SessionRelocationRequest, SessionRelocationResult, SessionRelocationTransaction } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionRelocationOptions, SessionRelocationRequest, SessionRelocationResult, SessionRelocationTransaction } from '@deepseek-ai/dsh-session-persistence'
 import {
   assertRelocationRequest, checkPlacementBudget, checkRelocationSize, effectivePlacementHeader, initialPlacement,
   placementRevision, readPlacement, readPlacementOperation, recoverPlacement, relocationFailure,
@@ -321,30 +321,106 @@ class JsonlSessionPersistence extends SessionPersistence {
   /**
    * Prepare a metadata-only directory change under the existing identity's lease.
    * @param request - expected observation and caller-generated operation UUID.
+   * @param options - exact live writer, whose lease remains held through teardown.
    * @returns an exclusive transaction; callers must close it in a finally block.
    */
-  override async beginRelocation(request: SessionRelocationRequest): Promise<SessionRelocationTransaction> {
+  override beginRelocation(
+    request: SessionRelocationRequest, options?: SessionRelocationOptions,
+  ): Promise<SessionRelocationTransaction> {
+    const captured = Object.freeze({ ...request })
+    const ownership = options === undefined ? undefined : { ...options }
+    return this.tracker.runRelocation(captured.sessionId, () => this.prepareRelocation(captured, ownership))
+  }
+
+  private async prepareRelocation(
+    request: SessionRelocationRequest, options?: SessionRelocationOptions,
+  ): Promise<SessionRelocationTransaction> {
     assertRelocationRequest(request)
-    request = Object.freeze({ ...request })
     await this.ensureRootEncoding()
-    this.tracker.claimWrite(request.sessionId)
-    let lease: SessionWriteLease | undefined
+    const oldWriter = options?.writer
+    if (oldWriter !== undefined && (oldWriter.id !== request.sessionId || !this.tracker.ownsWriter(oldWriter))) {
+      throw relocationFailure('conflict')
+    }
+    let lease: JsonlWriteOwnership | undefined
+    let yielded = oldWriter === undefined
+    const transfer = oldWriter === undefined ? undefined : oldWriter.lendOwnership(() => {
+      yielded = true
+      this.tracker.retainClaim(oldWriter)
+    })
+    if (transfer === undefined) this.tracker.claimWrite(request.sessionId)
+    else lease = transfer.lease
     let closed = false
+    let completed = false
+    let readyForWriter = false
+    let borrowed: { writer: JsonlSessionHandle; ownership: JsonlWriteOwnership } | undefined
+    let settlement = Promise.resolve()
+    const settle = <T>(operation: () => Promise<T>): Promise<T> => {
+      const result = settlement.then(operation)
+      settlement = result.then(() => undefined, () => undefined)
+      return result
+    }
+    const assertYielded = (): void => {
+      if (closed || completed || !yielded || borrowed !== undefined) throw relocationFailure('conflict')
+    }
+    const openWriter = (): Promise<SessionHandle> => settle(async () => {
+      assertYielded()
+      if (!readyForWriter) throw relocationFailure('conflict')
+      const selected = await this.findLog(request.sessionId)
+      if (selected === undefined) throw new SessionPersistenceNotFoundError(request.sessionId)
+      const stored = await this.requireStoredLog(request.sessionId)
+      const placement = await readPlacement(dirname(selected.sourcePath), request.sessionId)
+      const ownership: JsonlWriteOwnership = { release: () => {
+        if (borrowed === undefined) throw relocationFailure('conflict')
+        this.tracker.retainClaim(borrowed.writer)
+        borrowed = undefined
+        return Promise.resolve()
+      } }
+      const writer = this.tracker.adopt(new JsonlSessionHandle(this, request.sessionId,
+        effectivePlacementHeader(stored.meta, placement), 'write', {
+          cursor: stored.events.length, materialized: true, inheritedEventCount: stored.inheritedEventCount,
+          tornTruncateTo: stored.tornTruncateTo, recoveredTail: stored.recoveredTail, primed: stored,
+        }, ownership))
+      borrowed = { writer, ownership }
+      return writer
+    })
+    const complete = (writer: SessionHandle): Promise<void> => settle(async () => {
+      if (closed || completed || borrowed?.writer !== writer || lease === undefined) throw relocationFailure('conflict')
+      const current = borrowed
+      await current.writer.drainLive()
+      await current.writer.flush()
+      if (borrowed !== current) throw relocationFailure('conflict')
+      current.writer.acceptOwnership(current.ownership, lease)
+      lease = undefined
+      completed = true
+    })
     const release = async (): Promise<void> => {
       if (closed) return
+      if (!yielded && transfer?.cancel()) {
+        closed = true
+        lease = undefined
+        return
+      }
+      const failures: unknown[] = []
+      try { if (!yielded) await oldWriter?.close() } catch (error) { failures.push(error) }
+      try { if (!completed) await borrowed?.writer.close() } catch (error) { failures.push(error) }
       closed = true
-      try {
-        await lease?.release()
-      } finally {
+      if (!completed) {
+        try { await lease?.release() } catch (error) { failures.push(error) }
         this.tracker.releaseClaim(request.sessionId)
       }
+      if (failures.length > 1) throw new AggregateError(failures, 'session relocation ownership release failed')
+      if (failures.length === 1) throw failures[0]
     }
     try {
       const selected = await this.findLog(request.sessionId)
       if (selected === undefined) throw new SessionPersistenceNotFoundError(request.sessionId)
       if (selected.sourceVersion !== SESSION_FORMAT_VERSION) throw relocationFailure('unsupported')
       const dir = dirname(selected.sourcePath)
-      lease = await this.acquireLease(request.sessionId, undefined, dir)
+      lease ??= await this.acquireLease(request.sessionId, undefined, dir)
+      if (oldWriter !== undefined) {
+        await oldWriter.drainLive()
+        await oldWriter.flush()
+      }
       const raw = await this.readGenerationHeader(selected, request.sessionId)
       if (raw === undefined || raw.cwd === undefined) throw relocationFailure('unsupported')
       const physicalRevision = fileRevision(await stat(selected.sourcePath, { bigint: true }))
@@ -357,10 +433,12 @@ class JsonlSessionPersistence extends SessionPersistence {
       if (previous?.status === 'committed') {
         const result = previous.result
         if (result === undefined) throw relocationFailure('recovery-required')
+        readyForWriter = true
         return {
-          commit: () => closed ? Promise.reject(relocationFailure('conflict')) : Promise.resolve(result),
-          rollback: () => Promise.reject(relocationFailure('conflict')),
-          close: release,
+          openWriter, complete,
+          commit: () => settle(() => { assertYielded(); return Promise.resolve(result) }),
+          rollback: () => settle(() => Promise.reject(relocationFailure('conflict'))),
+          close: () => settle(release),
         }
       }
       const before = existing ?? initialPlacement(raw)
@@ -387,14 +465,8 @@ class JsonlSessionPersistence extends SessionPersistence {
       let committed: SessionRelocationResult | undefined
       let rolledBack = false
       let publicationStarted = false
-      let settlement = Promise.resolve()
-      const settle = <T>(operation: () => Promise<T>): Promise<T> => {
-        const result = settlement.then(operation)
-        settlement = result.then(() => undefined, () => undefined)
-        return result
-      }
       const rollback = async (): Promise<void> => {
-        if (closed) throw relocationFailure('conflict')
+        if (closed || completed || borrowed !== undefined) throw relocationFailure('conflict')
         if (rolledBack) return
         operation = { ...operation, status: 'rolling-back',
           ...(publicationStarted && !noOp ? { rollbackPlacement: { ...before, revision: randomUUID() } } : {}) }
@@ -403,24 +475,30 @@ class JsonlSessionPersistence extends SessionPersistence {
         operation = { ...operation, status: 'rolled-back' }
         await writePlacementOperation(dir, operation)
         rolledBack = true
+        readyForWriter = true
         this.coldLogMemo.delete(request.sessionId)
       }
       return {
+        openWriter, complete,
         commit: () => settle(async () => {
-          if (closed || rolledBack) throw relocationFailure('conflict')
+          assertYielded()
+          if (rolledBack) throw relocationFailure('conflict')
           if (committed !== undefined) return committed
+          if (fileRevision(await stat(selected.sourcePath, { bigint: true })) !== physicalRevision) throw relocationFailure('conflict')
           await this.assertRelocationTarget(request.targetCwd)
           if (!noOp) {
             publicationStarted = true
             if (existing === undefined) await writePlacement(dir, before)
             await writePlacement(dir, after)
           }
-          committed = { sessionId: request.sessionId, operationId: request.operationId,
+          const result = { sessionId: request.sessionId, operationId: request.operationId,
             sourceCwd: before.cwd, cwd: after.cwd, revision: noOp ? revision : placementRevision(physicalRevision, after) }
-          operation = { ...operation, status: 'committed', result: committed }
+          operation = { ...operation, status: 'committed', result }
           await writePlacementOperation(dir, operation)
+          committed = result
+          readyForWriter = true
           this.coldLogMemo.delete(request.sessionId)
-          return committed
+          return result
         }),
         rollback: () => settle(rollback),
         close: () => settle(async () => {

@@ -2085,9 +2085,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'beginRelocation(_request: SessionRelocationRequest): Promise<SessionRelocationTransaction>',
+        signature: 'beginRelocation(_request: SessionRelocationRequest, _options?: SessionRelocationOptions): Promise<SessionRelocationTransaction>',
         description: 'Prepare a directory change while retaining the session\'s exclusive write lease. The consumer reconciles related state, commits, and closes in a finally block.',
-        parameters: [{ name: '_request', description: 'caller identity and exact expected observation.' }],
+        parameters: [{ name: '_request', description: 'caller identity and exact expected observation.' }, { name: '_options', description: 'optional live write ownership retained through teardown.' }],
         returns: 'a transaction that retains ownership through commit or rollback.',
       },
       {
@@ -6805,6 +6805,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionReferenceMentionCandidate extends SessionReferenceCandidate {\n    mention: string;\n}',
   },
   {
+    name: 'SessionRelocationOptions',
+    declaration: 'export interface SessionRelocationOptions {\n    readonly writer?: SessionHandle;\n}',
+  },
+  {
     name: 'SessionRelocationRequest',
     declaration: 'export interface SessionRelocationRequest {\n    readonly sessionId: SessionId;\n    readonly operationId: string;\n    readonly expectedCwd: string;\n    readonly expectedRevision: SessionPersistenceRevision;\n    readonly targetCwd: string;\n}',
   },
@@ -6814,7 +6818,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionRelocationTransaction',
-    declaration: 'export interface SessionRelocationTransaction {\n    commit(): Promise<SessionRelocationResult>;\n    rollback(): Promise<void>;\n    close(): Promise<void>;\n}',
+    declaration: 'export interface SessionRelocationTransaction {\n    commit(): Promise<SessionRelocationResult>;\n    rollback(): Promise<void>;\n    openWriter(): Promise<SessionHandle>;\n    complete(writer: SessionHandle): Promise<void>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'SessionRenameRequest',

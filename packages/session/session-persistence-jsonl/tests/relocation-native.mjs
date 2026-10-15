@@ -153,6 +153,36 @@ async function check(ctx) {
       assert.equal((await persistence.stat(id)).header.cwd, cwdA)
       assert.deepEqual(await readFile(asset), assetBytes)
     })
+    await run('live writer hands its lease to a verified replacement and restores through rollback', async () => {
+      const current = await persistence.stat(id)
+      writer = await persistence.open(id, 'write')
+      const old = writer
+      transaction = await persistence.beginRelocation({ sessionId: id, operationId: randomUUID(),
+        expectedCwd: cwdA, expectedRevision: current.revision, targetCwd: cwdB }, { writer })
+      await old.close()
+      await transaction.commit()
+      const attempted = await transaction.openWriter()
+      assert.equal(attempted.header.cwd, cwdB)
+      await attempted.close()
+      await transaction.rollback()
+      writer = await transaction.openWriter()
+      assert.equal(writer.header.cwd, cwdA)
+      await transaction.complete(writer)
+      await transaction.close()
+      transaction = undefined
+      await old.close()
+      await writer.append([
+        { type: 'turn/start', seq: 4, time: 5, data: { turn: 3 } },
+        { type: 'turn/end', seq: 5, time: 6, data: { turn: 3, reason: { kind: 'completed' } } },
+      ])
+      await writer.close()
+      writer = undefined
+      assert.equal((await persistence.stat(id)).header.cwd, cwdA)
+      const reader = await persistence.open(id, 'read')
+      try { assert.equal((await reader.read()).events.length, 6) } finally { await reader.close() }
+      assert.deepEqual((await readFile(physicalLog)).subarray(0, originalBytes.length), originalBytes)
+      assert.deepEqual(await readFile(asset), assetBytes)
+    })
     await run('missing required placement refuses a silent fallback', async () => {
       const path = join(physicalDir, 'cwd-placement.json')
       await rename(path, `${path}.held`)

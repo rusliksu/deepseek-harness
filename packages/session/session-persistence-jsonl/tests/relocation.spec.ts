@@ -2,20 +2,36 @@ import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, Session, SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
-import type { SessionRelocationRequest } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionPersistence, SessionRelocationRequest } from '@deepseek-ai/dsh-session-persistence'
 import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type { Config } from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { logPath } from '../src/format.ts'
 
+const preparationGate: { pause?: () => Promise<void> } = vi.hoisted(() => ({}))
+vi.mock('../src/placement.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/placement.ts')>()
+  return { ...actual, checkPlacementBudget: async (...args: Parameters<typeof actual.checkPlacementBudget>) => {
+    await preparationGate.pause?.()
+    return actual.checkPlacementBudget(...args)
+  } }
+})
+
 const contexts: Context[] = []
 const directories: string[] = []
 
+async function requiredSnapshot(persistence: SessionPersistence, id: SessionId) {
+  const snapshot = await persistence.stat(id)
+  if (snapshot === undefined) throw new Error('expected persisted fixture session')
+  return snapshot
+}
+
 afterEach(async () => {
+  delete preparationGate.pause
   for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
   for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true })
 })
@@ -40,19 +56,164 @@ async function fixture(options: Partial<Config> = {}, seeded = false) {
   await handle.append(events)
   await handle.close()
   const request: SessionRelocationRequest = { sessionId: id, operationId: randomUUID(), expectedCwd: cwdA,
-    expectedRevision: (await ctx.sessionPersistence.stat(id)).revision, targetCwd: cwdB }
+    expectedRevision: (await requiredSnapshot(ctx.sessionPersistence, id)).revision, targetCwd: cwdB }
   const path = logPath(join(root, 'sessions'), cwdA, id, 'none')
-  return { root, cwdA, cwdB, header, events, request, path, persistence: ctx.sessionPersistence }
+  return { ctx, root, cwdA, cwdB, header, events, request, path, persistence: ctx.sessionPersistence }
 }
 
 describe('session relocation refusals and lineage', () => {
+  it('waits for an in-flight relocation preparation before backend unload settles', async () => {
+    const f = await fixture()
+    const other = new Context()
+    contexts.push(other)
+    await other.plugin(JsonlSessionPersistence, { root: join(f.root, 'sessions'), compression: 'none' })
+    const entered = Promise.withResolvers<undefined>()
+    const resume = Promise.withResolvers<undefined>()
+    preparationGate.pause = () => { entered.resolve(undefined); return resume.promise }
+    const preparing = f.persistence.beginRelocation(f.request)
+    try {
+      await entered.promise
+      const unloading = f.ctx.fiber.dispose()
+      try {
+        await expect(other.sessionPersistence.open(f.header.id, 'write')).rejects.toBeInstanceOf(SessionAlreadyOwnedError)
+      } finally { resume.resolve(undefined) }
+      const transaction = await preparing
+      await unloading
+      const successor = await other.sessionPersistence.open(f.header.id, 'write')
+      await successor.close()
+      await expect(transaction.commit()).rejects.toMatchObject({ code: 'session/relocate-conflict' })
+    } finally {
+      resume.resolve(undefined)
+      await (await preparing).close()
+    }
+  })
+
+  it('releases a transaction-held kernel lease when the owning backend unloads', async () => {
+    const f = await fixture()
+    const other = new Context()
+    contexts.push(other)
+    await other.plugin(JsonlSessionPersistence, { root: join(f.root, 'sessions'), compression: 'none' })
+    const old = await f.persistence.open(f.header.id, 'write')
+    const transaction = await f.persistence.beginRelocation(f.request, { writer: old })
+    await old.close()
+    await f.ctx.fiber.dispose()
+    const successor = await other.sessionPersistence.open(f.header.id, 'write')
+    await successor.close()
+    await expect(transaction.commit()).rejects.toMatchObject({ code: 'session/relocate-conflict' })
+    await transaction.close()
+  })
+
+  it('keeps routing an existing Session when the backend missed its creation event', async () => {
+    const f = await fixture()
+    const session = Session.create(f.header.id, f.events, f.header)
+    const first = await f.persistence.open(f.header.id, 'write')
+    f.ctx.emit('session/event', session, { type: 'turn/start', seq: SessionSeq(2), time: 3, data: { turn: 2 } })
+    await f.ctx.parallel('session/flush', session)
+    await first.close()
+    const second = await f.persistence.open(f.header.id, 'write')
+    f.ctx.emit('session/event', session, { type: 'turn/end', seq: SessionSeq(3), time: 4,
+      data: { turn: 2, reason: { kind: 'completed' } } })
+    await f.ctx.parallel('session/flush', session)
+    await second.close()
+    const reader = await f.persistence.open(f.header.id, 'read')
+    try { expect((await reader.read()).events.map(event => event.seq)).toEqual([0, 1, 2, 3]) } finally { await reader.close() }
+  })
+
+  it('ignores old incarnation events and disposal after the new writer is published', async () => {
+    const f = await fixture()
+    const old = await f.persistence.open(f.header.id, 'write')
+    const oldSession = Session.create(f.header.id, f.events, old.header)
+    f.ctx.emit('session/created', oldSession)
+    const transaction = await f.persistence.beginRelocation(f.request, { writer: old })
+    try {
+      await old.close()
+      await transaction.commit()
+      const next = await transaction.openWriter()
+      const nextSession = Session.create(f.header.id, f.events, next.header)
+      f.ctx.emit('session/created', nextSession)
+      await transaction.complete(next)
+      await transaction.close()
+      f.ctx.emit('session/disposed', oldSession)
+      f.ctx.emit('session/event', oldSession, { type: 'turn/start', seq: SessionSeq(2), time: 3, data: { turn: 99 } })
+      f.ctx.emit('session/event', nextSession, { type: 'turn/start', seq: SessionSeq(2), time: 3, data: { turn: 2 } })
+      await f.ctx.parallel('session/flush', nextSession)
+      const reader = await f.persistence.open(f.header.id, 'read')
+      try { expect((await reader.read()).events.at(-1)?.data).toEqual({ turn: 2 }) } finally { await reader.close() }
+      await next.close()
+    } finally { await transaction.close(); await old.close() }
+  })
+
+  it('hands an existing writer through relocation without releasing its kernel lease', async () => {
+    const f = await fixture()
+    const other = new Context()
+    contexts.push(other)
+    await other.plugin(JsonlSessionPersistence, { root: join(f.root, 'sessions'), compression: 'none' })
+    const old = await f.persistence.open(f.header.id, 'write')
+    const busy = () => expect(other.sessionPersistence.open(f.header.id, 'write')).rejects.toBeInstanceOf(SessionAlreadyOwnedError)
+    const transaction = await f.persistence.beginRelocation(f.request, { writer: old })
+    try {
+      await busy()
+      await old.close()
+      await busy()
+      await transaction.commit()
+      await busy()
+      const next = await transaction.openWriter()
+      expect(next.header.cwd).toBe(f.cwdB)
+      await busy()
+      await transaction.complete(next)
+      await transaction.close()
+      await old.close()
+      await busy()
+      await next.append([{ type: 'turn/start', seq: SessionSeq(2), time: 3, data: { turn: 2 } }])
+      await next.close()
+    } finally { await transaction.close(); await old.close() }
+    const successor = await other.sessionPersistence.open(f.header.id, 'write')
+    try { expect((await successor.read()).events).toHaveLength(3) } finally { await successor.close() }
+  })
+
+  it('returns a borrowed replacement writer to the transaction for rollback', async () => {
+    const f = await fixture()
+    const old = await f.persistence.open(f.header.id, 'write')
+    const transaction = await f.persistence.beginRelocation(f.request, { writer: old })
+    try {
+      await old.close()
+      await transaction.commit()
+      const failed = await transaction.openWriter()
+      await expect(transaction.rollback()).rejects.toMatchObject({ code: 'session/relocate-conflict' })
+      await failed.close()
+      await expect(f.persistence.open(f.header.id, 'write')).rejects.toBeInstanceOf(SessionAlreadyOwnedError)
+      await transaction.rollback()
+      const restored = await transaction.openWriter()
+      expect(restored.header.cwd).toBe(f.cwdA)
+      await transaction.complete(restored)
+      await transaction.close()
+      await failed.close()
+      await restored.append([{ type: 'turn/start', seq: SessionSeq(2), time: 3, data: { turn: 2 } }])
+      await restored.close()
+    } finally { await transaction.close(); await old.close() }
+    expect((await requiredSnapshot(f.persistence, f.header.id)).header.cwd).toBe(f.cwdA)
+  })
+
+  it('preserves the existing writer when preparation is refused or abandoned', async () => {
+    const f = await fixture()
+    const old = await f.persistence.open(f.header.id, 'write')
+    await expect(f.persistence.beginRelocation({ ...f.request, expectedCwd: f.cwdB }, { writer: old }))
+      .rejects.toMatchObject({ code: 'session/relocate-conflict' })
+    const transaction = await f.persistence.beginRelocation(f.request, { writer: old })
+    await transaction.close()
+    await old.append([{ type: 'turn/start', seq: SessionSeq(2), time: 3, data: { turn: 2 } }])
+    await expect(f.persistence.open(f.header.id, 'write')).rejects.toBeInstanceOf(SessionAlreadyOwnedError)
+    await old.close()
+    expect((await requiredSnapshot(f.persistence, f.header.id)).header.cwd).toBe(f.cwdA)
+  })
+
   it('settles an already-admitted close before a concurrent commit', async () => {
     const f = await fixture()
     const transaction = await f.persistence.beginRelocation(f.request)
     const closed = transaction.close()
     const refused = expect(transaction.commit()).rejects.toMatchObject({ code: 'session/relocate-conflict' })
     await Promise.all([closed, refused])
-    expect((await f.persistence.stat(f.header.id)).header.cwd).toBe(f.cwdA)
+    expect((await requiredSnapshot(f.persistence, f.header.id)).header.cwd).toBe(f.cwdA)
     const writer = await f.persistence.open(f.header.id, 'write')
     await writer.close()
   })
@@ -72,7 +233,7 @@ describe('session relocation refusals and lineage', () => {
       if (corruption === 'missing') await rename(`${path}.held`, path)
       else await writeFile(path, original)
     }
-    expect((await f.persistence.stat(f.header.id)).header.cwd).toBe(f.cwdB)
+    expect((await requiredSnapshot(f.persistence, f.header.id)).header.cwd).toBe(f.cwdB)
   })
 
   it('keeps one identity and appends at the original physical location after relocation', async () => {
@@ -90,14 +251,14 @@ describe('session relocation refusals and lineage', () => {
     expect(bytes.subarray(0, prefix.length)).toEqual(prefix)
     expect(bytes.length).toBeGreaterThan(prefix.length)
     expect((await f.persistence.list()).filter(item => item.header.id === f.header.id)).toHaveLength(1)
-    expect((await f.persistence.stat(f.header.id)).header).toEqual({ ...f.header, cwd: f.cwdB })
+    expect((await requiredSnapshot(f.persistence, f.header.id)).header).toEqual({ ...f.header, cwd: f.cwdB })
   })
 
   it('refuses a foreign revision without changing the current observation', async () => {
     const f = await fixture()
     const request = { ...f.request, expectedRevision: 'foreign' as SessionRelocationRequest['expectedRevision'] }
     await expect(f.persistence.beginRelocation(request)).rejects.toMatchObject({ code: 'session/relocate-conflict' })
-    expect((await f.persistence.stat(f.header.id)).revision).toBe(f.request.expectedRevision)
+    expect((await requiredSnapshot(f.persistence, f.header.id)).revision).toBe(f.request.expectedRevision)
   })
 
   it('refuses a writer held by an independent backend instance', async () => {
@@ -131,7 +292,7 @@ describe('session relocation refusals and lineage', () => {
     const f = await fixture(options)
     const bytes = await readFile(f.path)
     await expect(f.persistence.beginRelocation(f.request)).rejects.toMatchObject({ code: 'session/relocate-unsupported' })
-    expect((await f.persistence.stat(f.header.id)).revision).toBe(f.request.expectedRevision)
+    expect((await requiredSnapshot(f.persistence, f.header.id)).revision).toBe(f.request.expectedRevision)
     expect(await readFile(f.path)).toEqual(bytes)
   })
 
@@ -141,7 +302,7 @@ describe('session relocation refusals and lineage', () => {
     await expect(f.persistence.beginRelocation(f.request)).rejects.toMatchObject({ code: 'session/relocate-target-invalid' })
     const writer = await f.persistence.open(f.header.id, 'write')
     await writer.close()
-    expect((await f.persistence.stat(f.header.id)).revision).toBe(f.request.expectedRevision)
+    expect((await requiredSnapshot(f.persistence, f.header.id)).revision).toBe(f.request.expectedRevision)
   })
 
   it('refuses a target removed between prepare and commit and closes safely', async () => {
@@ -151,14 +312,14 @@ describe('session relocation refusals and lineage', () => {
       await rm(f.cwdB, { recursive: true })
       await expect(transaction.commit()).rejects.toMatchObject({ code: 'session/relocate-target-invalid' })
     } finally { await transaction.close() }
-    expect((await f.persistence.stat(f.header.id)).header.cwd).toBe(f.cwdA)
+    expect((await requiredSnapshot(f.persistence, f.header.id)).header.cwd).toBe(f.cwdA)
   })
 
   it('refuses a torn generation without repairing or truncating it', async () => {
     const f = await fixture()
     await appendFile(f.path, '{"uncommitted":')
     const bytes = await readFile(f.path)
-    const request = { ...f.request, expectedRevision: (await f.persistence.stat(f.header.id)).revision }
+    const request = { ...f.request, expectedRevision: (await requiredSnapshot(f.persistence, f.header.id)).revision }
     await expect(f.persistence.beginRelocation(request)).rejects.toMatchObject({ code: 'session/relocate-recovery-required' })
     expect(await readFile(f.path)).toEqual(bytes)
   })

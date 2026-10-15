@@ -59,6 +59,8 @@ kind: "package-reference"
 
 后端通过 `beginRelocation` 支持以排他事务迁移当前格式会话。调用方提供 UUID 操作标识、观察到的目录与 revision，以及已有的规范目标目录。活跃写入者、过期观察值、历史格式、受损日志或超出限制都会在发布前拒绝请求。
 
+向 `beginRelocation` 传入 `{ writer }`，可在代理完成清理期间保留该句柄的内核租约。关闭旧句柄后，使用 `openWriter()` 为已提交或已恢复的目录取得句柄，并在验证后调用 `complete(writer)` 转交永久所有权。在完成前，关闭借用句柄会将所有权归还给事务以便回滚。若尚未开始清理，关闭已放弃的准备事务仍会保留原始句柄可用；已退役 Session 的事件不能到达替代写入句柄。后端卸载时会先完成未关闭的迁移事务，再关闭剩余句柄。
+
 事务持有原会话的写入 lease，直到调用 `close()`。提交发布独立的目录元数据；历史 generation 与附件留在原物理位置，字节不变。冷读取 header、列表、revision 与后续追加使用该目录。完全相同的重试返回原结果；以不同参数复用 UUID 会被拒绝。进程重启后，在同一个内核 lease 下完成中断的发布。必需元数据缺失或受损会拒绝访问，不会静默恢复原目录。调用方必须在释放事务前协调 workspace 归属与 agent 生命周期。
 
 ### 磁盘布局
@@ -98,6 +100,7 @@ kind: "package-reference"
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## 理解实现
 
 <details>

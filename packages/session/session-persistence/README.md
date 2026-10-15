@@ -53,6 +53,8 @@ Every log read and write flows through the returned `SessionHandle`; there are n
 
 A provider advertises `supportsRelocation` when it implements `beginRelocation(request)`. The default provider contract refuses unsupported relocation. Requests use a UUID operation identity and the exact observed directory and revision. The returned transaction holds exclusive session ownership through commit or rollback until `close()`; consumers close it in a `finally` block. A repeated committed request returns its original result. The [JSONL provider](../session-persistence-jsonl/README.md#working-directory-transactions) documents format, size, recovery, and physical-location rules.
 
+Passing `{ writer }` to `beginRelocation` retains that exact handle's kernel lease while its agent finishes teardown. After closing the old handle, use `openWriter()` for the committed or restored directory and `complete(writer)` to transfer permanent ownership after verification. Until completion, closing a borrowed writer returns ownership to the transaction for rollback. Closing an abandoned preparation keeps an original handle usable if teardown has not started; retired Session events cannot reach the replacement writer.
+
 ### Ownership and visibility
 
 `create` and `open(id, 'write')` take in-process single-writer ownership: a second write open while an owner is active rejects with `SessionAlreadyOwnedError`, `create` on an occupied id rejects with `SessionAlreadyExistsError`, and a mutation on a `read` handle rejects with `SessionReadOnlyError` — one handle type, runtime refusal. Any operation on a closed handle rejects with `SessionHandleClosedError`, and `SessionOwnershipLostError` marks a write handle whose ownership is permanently gone (close it and reopen). A created session is observable in this process from the moment `create` resolves, while the backend may defer physical materialization until the first `append` or `flush`; other processes see only materialized sessions, and a session that never materialized before a crash never existed.
@@ -72,6 +74,7 @@ A stored log the current build cannot faithfully interpret is refused with a dir
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
 <details>

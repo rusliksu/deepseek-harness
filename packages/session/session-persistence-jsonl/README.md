@@ -59,6 +59,8 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 The provider supports exclusive relocation of a current-format session through `beginRelocation`. The caller supplies a UUID operation identity, the observed directory and revision, and an existing canonical target directory. A live writer, stale observation, historical format, damaged log, or exceeded limit refuses the request before publication.
 
+Passing `{ writer }` to `beginRelocation` retains that exact handle's kernel lease while its agent finishes teardown. After closing the old handle, use `openWriter()` for the committed or restored directory and `complete(writer)` to transfer permanent ownership after verification. Until completion, closing a borrowed writer returns ownership to the transaction for rollback. Closing an abandoned preparation keeps an original handle usable if teardown has not started; retired Session events cannot reach the replacement writer. Backend unload settles outstanding relocation transactions before closing its remaining handles.
+
 The transaction retains the original session's write lease until `close()`. Commit publishes separate placement metadata; historical generations and attachments stay byte-identical at their original physical location. Cold headers, listings, revisions, and subsequent appends use that placement. An exact retry returns the original result; reusing its UUID with different arguments refuses. A process restart settles an interrupted publication under the same kernel lease. Missing or corrupt required metadata refuses access instead of silently restoring the original directory. Consumers must reconcile workspace membership and agent lifecycle before releasing the transaction.
 
 ### On-disk layout
@@ -98,6 +100,7 @@ Historical `stat` and `list` revisions require metadata work proportional to the
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
 <details>
