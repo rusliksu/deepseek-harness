@@ -32,6 +32,9 @@
 /session-persistence/lightweight-source-revisions:
   en: 142ff3bed547efcf
   zh: a73ca5ea4743d3e8
+/session-persistence/working-directory-transactions:
+  en: 15ea6cd531940b3b
+  zh: b49d1e0131b32ec6
 /session-persistence/the-backend:
   en: adcd78909565b046
   zh: a09bcb6ec0ebad9e

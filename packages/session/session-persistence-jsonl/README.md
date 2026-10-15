@@ -45,11 +45,21 @@ Choose this backend when consumers benefit from one artifact per session — nav
 | Field | Default | Meaning |
 |---|---|---|
 | `root` | required | Root directory for all session files |
+| `relocationLogBytes` | `268435456` | Maximum physical and decoded current log bytes accepted for relocation |
+| `relocationDataBytes` | `1073741824` | Maximum session-owned bytes including relocation metadata |
+| `relocationFiles` | `10000` | Maximum session-owned files including relocation metadata |
 | `compression` | `'zstd'` | Physical encoding: `'zstd'` checksummed frames, or `'none'` newline-delimited UTF-8 text |
 
 Live-event write batching is not configuration: the batching window is the seam's internal scheduling policy inside each write handle.
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-session-persistence-jsonl) is the exhaustive source for every accepted field and its JSDoc.
+
+<a id="working-directory-transactions"></a>
+### Working-directory transactions
+
+The provider supports exclusive relocation of a current-format session through `beginRelocation`. The caller supplies a UUID operation identity, the observed directory and revision, and an existing canonical target directory. A live writer, stale observation, historical format, damaged log, or exceeded limit refuses the request before publication.
+
+The transaction retains the original session's write lease until `close()`. Commit publishes separate placement metadata; historical generations and attachments stay byte-identical at their original physical location. Cold headers, listings, revisions, and subsequent appends use that placement. An exact retry returns the original result; reusing its UUID with different arguments refuses. A process restart settles an interrupted publication under the same kernel lease. Missing or corrupt required metadata refuses access instead of silently restoring the original directory. Consumers must reconcile workspace membership and agent lifecycle before releasing the transaction.
 
 ### On-disk layout
 

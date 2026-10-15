@@ -322,6 +322,48 @@ interface SessionPersistenceSnapshot {
 
 可选的 `eventCount`/`sizeBytes` 字段仍是供明确需要它们的 consumer 使用的低成本 backend observation。Session 列表不借助这两个字段打开冷日志，只读取 header 与经过 identity 校验的 projection cache hint，因此 cache 或 Session format 升级不会把启动变成 body scan。
 
+## 工作目录事务
+
+后端通过 `supportsRelocation` 声明支持。事务持有排他写入所有权，直到调用方关闭它；请求比较观察到的 cwd 与不透明 revision。[JSONL 后端](../../packages/session/session-persistence-jsonl/README.zh.md#working-directory-transactions)负责存储限制、持久发布、回滚恢复，以及逻辑 cwd 与不可变物理来源的区别。
+
+```ts type-equiv
+/** A caller-generated operation identity and the exact observation it may replace. */
+interface SessionRelocationRequest {
+  readonly sessionId: SessionId
+  readonly operationId: string
+  readonly expectedCwd: string
+  readonly expectedRevision: SessionPersistenceRevision
+  readonly targetCwd: string
+}
+```
+
+```ts type-equiv
+/** The authoritative working directory after one committed operation. */
+interface SessionRelocationResult {
+  readonly sessionId: SessionId
+  readonly operationId: string
+  readonly sourceCwd: string
+  readonly cwd: string
+  readonly revision: SessionPersistenceRevision
+}
+```
+
+```ts type-equiv
+/**
+ * Exclusive ownership retained while the consumer reconciles its related data.
+ * A consumer must close the transaction in a finally block. Closing an unpublished
+ * transaction leaves its original directory active; closing a committed one retains it.
+ */
+interface SessionRelocationTransaction {
+  /** Publish the prepared working directory; repeats return the same result. */
+  commit(): Promise<SessionRelocationResult>
+  /** Restore the original placement before releasing exclusive ownership. */
+  rollback(): Promise<void>
+  /** Finish recovery bookkeeping and release both process and kernel ownership. */
+  close(): Promise<void>
+}
+```
+
 ## 后端
 
 随产品交付的 provider 实现抽象 `SessionPersistence` 约定（`create`/`open`/`stat`/`list`，逐会话 `SessionHandle` 承载 `read`/`append`/`flush`/`close`，全程可选支持取消），并通过共享的持久化契约套件：
@@ -349,6 +391,14 @@ Visibility: a created session is observable through `stat`/`list`/`open` in this
 Freshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.
 
 ```ts cordis-catalog
+/**
+ * Prepare a directory change while retaining the session's exclusive write lease.
+ * The consumer reconciles related state, commits, and closes in a finally block.
+ * @param _request - caller identity and exact expected observation.
+ * @returns a transaction that retains ownership through commit or rollback.
+ */
+beginRelocation(_request: SessionRelocationRequest): Promise<SessionRelocationTransaction>
+
 /**
  * Create a new stored session and take its write ownership.
  * @param header - the immutable header (id, version, cwd, lineage) to store.

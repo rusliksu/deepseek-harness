@@ -2075,9 +2075,20 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Durable append-only session storage addressed through per-session handles.\n\nStorage semantics shared by every backend: events are contiguous from seq 0 and never rewritten; a torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.\n\nVisibility: a created session is observable through `stat`/`list`/`open` in this process from the moment `create` resolves, even while a backend defers physical materialization (a pure optimization); other processes see the session only once it materializes, and a session that never materialized before a crash never existed. `SessionHandle.flush` forces materialization.\n\nFreshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.',
     methods: [
       {
+        signature: 'readonly supportsRelocation: boolean = false',
+        description: 'Whether this provider implements exclusive working-directory transactions.',
+        parameters: [],
+      },
+      {
         signature: 'readonly identity: symbol = Symbol(\'sessionPersistence\')',
         description: 'Process-local instance identity, stable through Context proxies and distinct after service replacement.',
         parameters: [],
+      },
+      {
+        signature: 'beginRelocation(_request: SessionRelocationRequest): Promise<SessionRelocationTransaction>',
+        description: 'Prepare a directory change while retaining the session\'s exclusive write lease. The consumer reconciles related state, commits, and closes in a finally block.',
+        parameters: [{ name: '_request', description: 'caller identity and exact expected observation.' }],
+        returns: 'a transaction that retains ownership through commit or rollback.',
       },
       {
         signature: 'abstract create(header: SessionHeader, options?: SessionPersistenceCreateOptions): Promise<SessionHandle>',
@@ -6792,6 +6803,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionReferenceMentionCandidate',
     declaration: 'export interface SessionReferenceMentionCandidate extends SessionReferenceCandidate {\n    mention: string;\n}',
+  },
+  {
+    name: 'SessionRelocationRequest',
+    declaration: 'export interface SessionRelocationRequest {\n    readonly sessionId: SessionId;\n    readonly operationId: string;\n    readonly expectedCwd: string;\n    readonly expectedRevision: SessionPersistenceRevision;\n    readonly targetCwd: string;\n}',
+  },
+  {
+    name: 'SessionRelocationResult',
+    declaration: 'export interface SessionRelocationResult {\n    readonly sessionId: SessionId;\n    readonly operationId: string;\n    readonly sourceCwd: string;\n    readonly cwd: string;\n    readonly revision: SessionPersistenceRevision;\n}',
+  },
+  {
+    name: 'SessionRelocationTransaction',
+    declaration: 'export interface SessionRelocationTransaction {\n    commit(): Promise<SessionRelocationResult>;\n    rollback(): Promise<void>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'SessionRenameRequest',

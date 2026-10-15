@@ -1,0 +1,49 @@
+name: Chat relocation validation
+
+on:
+  push:
+    branches: [codex/dsh-chat-move-storage-validation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chat-relocation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  storage:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: pnpm install --ignore-scripts --frozen-lockfile
+      - run: pnpm exec tsx native/system/scripts/build.ts --host-addon-only
+      - run: pnpm exec tsc -b packages/session/session-persistence-jsonl/tsconfig.json
+      - name: Relocation and persistence regressions
+        run: >-
+          pnpm exec vitest run
+          packages/session/session-persistence-jsonl/tests/relocation.spec.ts
+          packages/session/session-persistence-jsonl/tests/jsonl.spec.ts
+          packages/session/session-persistence-jsonl/tests/lease.spec.ts
+          packages/session/session-persistence-jsonl/tests/win32.spec.ts
+          packages/session/session-persistence-jsonl/tests/generation.spec.ts
+          packages/session/session-persistence-jsonl/tests/zstd.spec.ts
+          packages/session/session-persistence/tests/storage-contract.spec.ts
+          --testTimeout 15000

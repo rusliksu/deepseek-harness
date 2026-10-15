@@ -45,11 +45,21 @@ kind: "package-reference"
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `root` | 必填 | 所有会话文件的根目录 |
+| `relocationLogBytes` | `268435456` | 迁移接受的当前日志物理字节与解码字节上限 |
+| `relocationDataBytes` | `1073741824` | 包含迁移元数据的会话所有数据字节上限 |
+| `relocationFiles` | `10000` | 包含迁移元数据的会话所有文件数量上限 |
 | `compression` | `'zstd'` | 物理编码：`'zstd'` 带校验和帧，或 `'none'` 换行分隔 UTF-8 文本 |
 
 实时事件的写入批处理不是配置：批处理窗口是该 seam 在每个写句柄内部的调度策略。
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-persistence-jsonl)是每个受支持字段及其 JSDoc 的穷尽式真源。
+
+<a id="working-directory-transactions"></a>
+### 工作目录事务
+
+后端通过 `beginRelocation` 支持以排他事务迁移当前格式会话。调用方提供 UUID 操作标识、观察到的目录与 revision，以及已有的规范目标目录。活跃写入者、过期观察值、历史格式、受损日志或超出限制都会在发布前拒绝请求。
+
+事务持有原会话的写入 lease，直到调用 `close()`。提交发布独立的目录元数据；历史 generation 与附件留在原物理位置，字节不变。冷读取 header、列表、revision 与后续追加使用该目录。完全相同的重试返回原结果；以不同参数复用 UUID 会被拒绝。进程重启后，在同一个内核 lease 下完成中断的发布。必需元数据缺失或受损会拒绝访问，不会静默恢复原目录。调用方必须在释放事务前协调 workspace 归属与 agent 生命周期。
 
 ### 磁盘布局
 
