@@ -3,18 +3,23 @@
 import { hostname } from 'node:os'
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-fs'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { z as zod } from 'zod'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
+import { SessionAlreadyOwnedError, SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
   ApiSessionAgentController,
+  hasApiSessionSubagentOwner,
   inspectApiSession,
   type ApiSessionAgentResult,
 } from './agent.ts'
@@ -30,6 +35,9 @@ import { SessionMediaReferences } from './media-references.ts'
 import { ArchivedSessionGate } from './archived-session-gate.ts'
 import type {
   ModelCatalog,
+  SessionRelocateRequest,
+  SessionRelocateValue,
+  SessionRelocationInfo,
   SessionWorkspacePathApplication,
   SessionAttachmentRequest,
   SessionAttachmentValue,
@@ -116,6 +124,7 @@ export class SessionController extends TypertRemoteService {
   })
 
   private readonly agents: ApiSessionAgentController
+  private readonly lifecycleOwner: { ctx: Context }
   private readonly commands: SessionCommandController
   private readonly controlState: SessionControlController
   private readonly history: SessionHistoryController
@@ -136,6 +145,7 @@ export class SessionController extends TypertRemoteService {
     super(ctx, 'sessionController', { namespace: 'session' })
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
+    this.lifecycleOwner = { ctx }
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())
     ctx.effect(() => ctx.fileUploads.registerAgentResolver(async (sessionId) => {
       const result = await this.agents.resolveAgent(sessionId)
@@ -272,6 +282,99 @@ export class SessionController extends TypertRemoteService {
   @Remote('create')
   create(request: SessionCreateRequest): Promise<SessionCreateValue> {
     return this.commands.create(request)
+  }
+
+  /**
+   * Observe relocation support and the exact persisted revision without resuming a chat.
+   * @param request - existing ordinary Session identity.
+   * @param signal - cancellation for the header observation.
+   * @returns support and the current directory/revision when the Session exists.
+   */
+  @Remote('relocationInfo')
+  async relocationInfo(request: { readonly sessionId: SessionId }, signal: AbortSignal): Promise<SessionRelocationInfo> {
+    if (!zod.object({ sessionId: zod.string().min(1) }).strict().safeParse(request).success) {
+      throw new RemoteError('gateway/bad-request', 'relocation observation requires a session identity', {})
+    }
+    const persistence = this.ctx.get('sessionPersistence')
+    const supported = persistence?.supportsRelocation === true && typeof this.ctx.get('agentLoop')?.relocate === 'function'
+      && typeof this.ctx.workspaceRegistry.relocateSession === 'function'
+      && typeof this.ctx.workspaceRegistry.sessionDirectoryContexts === 'function'
+    if (!supported) return { supported: false }
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
+    const live = this.ctx.sessions.get(request.sessionId)
+    if (live !== undefined) await this.ctx.sessions.flush(live)
+    const snapshot = await persistence.stat(request.sessionId, { signal })
+    if (snapshot === undefined || snapshot.header.cwd === undefined) return { supported: false }
+    using observation = await this.ctx.sessionQuery.observeSession(request.sessionId, { signal })
+    if (hasApiSessionSubagentOwner(this.ctx, observation, this.ctx.agents.get(request.sessionId))) return { supported: false }
+    const directoryContexts = await this.ctx.workspaceRegistry.sessionDirectoryContexts({ header: snapshot.header,
+      inheritedEventCount: observation.inheritedEventCount, eventCount: SessionLogOffset(observation.events.length) })
+    return directoryContexts === undefined ? { supported: false }
+      : { supported, cwd: snapshot.header.cwd, revision: snapshot.revision, directoryContexts }
+  }
+
+  /**
+   * Move one idle chat to an existing registered local project without moving its files.
+   * @param request - destination, exact source observation, and stable operation UUID.
+   * @param signal - caller cancellation before durable work is admitted.
+   * @returns the verified same-ID chat and final persisted revision.
+   */
+  @Remote('relocate')
+  async relocate(request: SessionRelocateRequest, signal: AbortSignal): Promise<SessionRelocateValue> {
+    signal.throwIfAborted()
+    if (!zod.object({
+      sessionId: zod.string().min(1),
+      targetWorkspaceId: zod.string().min(1),
+      operationId: zod.uuid(),
+      expectedCwd: zod.string().min(1),
+      expectedRevision: zod.string().min(1),
+    }).strict().safeParse(request).success) {
+      throw new RemoteError('gateway/bad-request', 'relocation requires a complete source observation and operation UUID', {})
+    }
+    const loop = this.ctx.get('agentLoop')
+    if (typeof loop?.relocate !== 'function') {
+      throw new RemoteError('session/relocate-unsupported', 'session relocation is unavailable', { sessionId: request.sessionId })
+    }
+    try {
+      return await this.ctx.workspaceRegistry.relocateSession({
+        ...request, expectedRevision: SessionPersistenceRevision(request.expectedRevision),
+      }, async (storageRequest, callbacks) => {
+        let composition: Awaited<ReturnType<ApiSessionAgentController['composeAgent']>>
+        {
+          using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
+          const live = this.ctx.agents.get(request.sessionId)
+          if (live !== undefined) {
+            if (hasApiSessionSubagentOwner(this.ctx, live.session, live)) {
+              throw new RemoteError('session/relocate-unsupported', 'subagent routing owns this session', { sessionId: request.sessionId })
+            }
+            composition = await this.agents.composeAgent(this.agents.presetForSession(live.session))
+          } else {
+            using observation = await this.ctx.sessionQuery.observeSession(request.sessionId, { signal })
+            if (hasApiSessionSubagentOwner(this.ctx, observation, undefined)) {
+              throw new RemoteError('session/relocate-unsupported', 'subagent routing owns this session', { sessionId: request.sessionId })
+            }
+            composition = await this.agents.composeAgent(this.agents.presetForObservation(observation))
+          }
+        }
+        signal.throwIfAborted()
+        return loop.relocate(this.lifecycleOwner.ctx, storageRequest, { setup: composition.setup }, callbacks)
+      })
+    } catch (error: unknown) {
+      if (error instanceof SessionAlreadyOwnedError) {
+        throw new RemoteError('session/relocate-busy', 'session has another writer', { sessionId: request.sessionId })
+      }
+      const code = error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined
+      switch (code) {
+        case 'session/relocate-busy':
+        case 'session/relocate-conflict':
+        case 'session/relocate-target-invalid':
+        case 'session/relocate-unsupported':
+        case 'session/relocate-recovery-required':
+          throw new RemoteError(code, code.replace('session/', ''), { sessionId: request.sessionId })
+        default:
+          throw new RemoteError('gateway/internal', 'session relocation failed', {}, { cause: error })
+      }
+    }
   }
 
   /**

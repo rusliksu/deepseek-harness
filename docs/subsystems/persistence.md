@@ -322,6 +322,68 @@ interface SessionPersistenceSnapshot {
 
 The optional `eventCount`/`sizeBytes` fields remain cheap backend observations for consumers that explicitly need them. Session listing does not use either field to open cold logs: it reads headers plus identity-checked projection-cache hints only, so a cache or Session-format upgrade never turns startup into a body scan.
 
+## Working-directory transactions
+
+Providers opt in through `supportsRelocation`. A transaction holds exclusive write ownership until the caller closes it; its request compares the observed cwd and opaque revision. The [JSONL provider](../../packages/session/session-persistence-jsonl/README.md#working-directory-transactions) owns storage limits, durable publication, rollback recovery, and the distinction between logical cwd and the immutable physical origin.
+
+A live relocation retains the same kernel lease through the old writer, transaction and replacement writer. Close the old writer after preparation, open the replacement with `openWriter()`, then call `complete(writer)` after verification; closing a borrowed writer returns ownership for rollback. An abandoned preparation leaves a still-open original writer usable. Late events from a retired Session cannot close or mutate its replacement.
+
+```ts type-equiv
+/** Optional live ownership retained through agent teardown. */
+interface SessionRelocationOptions {
+  /** Exact active write handle from this provider; omit for a cold session. */
+  readonly writer?: SessionHandle
+}
+```
+
+```ts type-equiv
+/** A caller-generated operation identity and the exact observation it may replace. */
+interface SessionRelocationRequest {
+  readonly sessionId: SessionId
+  readonly operationId: string
+  readonly expectedCwd: string
+  readonly expectedRevision: SessionPersistenceRevision
+  readonly targetCwd: string
+}
+```
+
+```ts type-equiv
+/** The authoritative working directory after one committed operation. */
+interface SessionRelocationResult {
+  readonly sessionId: SessionId
+  readonly operationId: string
+  readonly sourceCwd: string
+  readonly cwd: string
+  readonly revision: SessionPersistenceRevision
+}
+```
+
+```ts type-equiv
+/**
+ * Exclusive ownership retained while the consumer reconciles its related data.
+ * A consumer must close the transaction in a finally block. A supplied live writer
+ * must close after preparation and before commit. Closing an unpublished transaction
+ * leaves its original directory active; complete transfers the lease to its replacement.
+ */
+interface SessionRelocationTransaction {
+  /** Publish the prepared working directory; repeats return the same result. */
+  commit(): Promise<SessionRelocationResult>
+  /** Restore the original placement before releasing exclusive ownership. */
+  rollback(): Promise<void>
+  /** Open the committed or restored directory under the transaction's retained lease.
+   * @returns one borrowed write handle; close it before rollback or another open.
+   */
+  openWriter(): Promise<SessionHandle>
+  /** Transfer permanent ownership to the verified replacement handle.
+   * @param writer - the exact borrowed handle returned by openWriter.
+   * @param commitRelated - commit related durable records after the final flush, before lease transfer.
+   */
+  complete(writer: SessionHandle, commitRelated?: () => Promise<void>): Promise<void>
+  /** Close borrowed writers and release retained ownership unless complete transferred it. */
+  close(): Promise<void>
+}
+```
+
 ## The backend
 
 The shipped provider implements the abstract `SessionPersistence` contract (`create`/`open`/`stat`/`list`, with per-session `SessionHandle`s carrying `read`/`append`/`flush`/`close` and optional cancellation throughout) and passes the shared persistence contract suite:
@@ -349,6 +411,15 @@ Visibility: a created session is observable through `stat`/`list`/`open` in this
 Freshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.
 
 ```ts cordis-catalog
+/**
+ * Prepare a directory change while retaining the session's exclusive write lease.
+ * The consumer reconciles related state, commits, and closes in a finally block.
+ * @param _request - caller identity and exact expected observation.
+ * @param _options - optional live write ownership retained through teardown.
+ * @returns a transaction that retains ownership through commit or rollback.
+ */
+beginRelocation(_request: SessionRelocationRequest, _options?: SessionRelocationOptions): Promise<SessionRelocationTransaction>
+
 /**
  * Create a new stored session and take its write ownership.
  * @param header - the immutable header (id, version, cwd, lineage) to store.

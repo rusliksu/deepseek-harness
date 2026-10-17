@@ -4,8 +4,6 @@ English | [中文](architecture.zh.md)
 
 Read this before changing anything under `packages/`. It assumes you know Cordis; if you do not, start with the [primer](cordis-primer.md) or the [tutorial](cordis-tutorial/index.md).
 
-We recommend using an agent to explore the codebase and understand its architecture.
-
 ## Cordis
 
 [Cordis](cordis-primer.md) is the framework under dsh: plugins contribute services, typed events, and reversible effects to a shared context. Every part of the product is a plugin, including the model adapter, the tool registry, the session log, and the agent loop itself, so each is replaceable from configuration.
@@ -80,6 +78,8 @@ Events are the extension points, and picking the right domain is the first decis
 AgentLoop awaits serial `agent/created` initialization before starting queued work. Initialization failure rolls back creation; [agent-loop](../packages/core/agent-loop/README.md#understand-the-implementation) defines teardown ordering.
 
 The [event map](event-producer-consumer.md) lists every event's producers and consumers.
+
+Relocation holds identity admission and the writer lease while Workspace journals membership. Web startup awaits recovery.
 
 ## Turn flow
 

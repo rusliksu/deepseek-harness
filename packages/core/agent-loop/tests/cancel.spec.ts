@@ -307,7 +307,7 @@ describe('Agent.cancel()', () => {
     expect(agent.inbox.nextTurn).toHaveLength(0)
   })
 
-  it('does not latch a wake landing after disposal begins', async () => {
+  it('rejects a wake landing after disposal begins', async () => {
     const adapter = new MockAdapter(['hang-slow', textResponse('late reply')])
     const ctx = await harness(adapter)
     const handle = await ctx.agents.create({
@@ -319,11 +319,9 @@ describe('Agent.cancel()', () => {
     send(agent, 'active')
     await new Promise(resolve => setTimeout(resolve, 30))
 
-    // Dispose cancels with `{ kind: 'disposed' }`; a wake landing in the
-    // abort-to-idle window must not latch, so `whenIdle()` does not wait on
-    // a model turn over the session being torn down.
+    // The retired incarnation refuses input throughout abort-to-idle teardown.
     const disposal = handle.dispose()
-    setTimeout(() => { send(agent, 'late wake') }, 10)
+    expect(() =>{  send(agent, 'late wake') }).toThrow(/retired/)
     await disposal
 
     expect(adapter.requests).toHaveLength(1)

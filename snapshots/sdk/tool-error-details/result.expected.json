@@ -1,1 +1,1 @@
-{"sessionId":"{{sessionId}}","finalResponse":"ERROR_DETAILS_OK"}
+{"sessionId":"{{sessionId}}","finalResponse":"ERROR_DETAILS_OK","reason":{"kind":"completed"},"status":"idle"}

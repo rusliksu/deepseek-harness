@@ -105,9 +105,11 @@ export class SessionHistoryController {
       request.turnWindow,
     )
     const records = pageRecords(page.events)
+    const directoryContexts = await this.directoryContextsFor(source)
     return {
       records,
       hasMore: page.hasMore,
+      ...directoryContexts === undefined ? {} : { directoryContexts },
     }
   }
 
@@ -162,6 +164,9 @@ export class SessionHistoryController {
       }
       notify()
     }, { global: true })
+    const disposeRelocated = this.ctx.on('workspace/session-relocated', ({ sessionId }) => {
+      if (sessionId === target) close()
+    })
     const disposeAssistantStream = request.assistantStream !== true
       ? undefined
       : this.ctx.on('agent/assistant-stream', ({ agent, frame }) => {
@@ -177,6 +182,7 @@ export class SessionHistoryController {
     signal.addEventListener('abort', onAbort, { once: true })
     try {
       using source = await this.sourceFor(address, signal, true)
+      const directoryContexts = await this.directoryContextsFor(source)
       const events = source.events
       signal.throwIfAborted()
       const cursor = source.cursor
@@ -196,6 +202,7 @@ export class SessionHistoryController {
         cursor,
         records: pageRecords(page.events),
         hasMore: page.hasMore,
+        ...directoryContexts === undefined ? {} : { directoryContexts },
         projections: source.projections === undefined
           ? { asOfSeq: cursor, values: {} }
           : projectionBlock(source.projections),
@@ -235,6 +242,7 @@ export class SessionHistoryController {
       this.closeFollowers.delete(close)
       signal.removeEventListener('abort', onAbort)
       disposeCreated()
+      disposeRelocated()
       disposeEvent()
       disposeAssistantStream?.()
     }
@@ -274,6 +282,12 @@ export class SessionHistoryController {
     }
   }
 
+  private async directoryContextsFor(source: SessionObservation): Promise<SessionPage['directoryContexts']> {
+    const registry = this.ctx.get('workspaceRegistry')
+    if (typeof registry?.sessionDirectoryContexts !== 'function') return undefined
+    return await registry.sessionDirectoryContexts({ header: source.header,
+      inheritedEventCount: source.inheritedEventCount, eventCount: SessionLogOffset(source.events.length) })
+  }
 }
 
 function cursorBeforeNext(nextSeq: SessionLogOffsetType): SessionSeqCursor {

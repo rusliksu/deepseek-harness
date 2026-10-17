@@ -109,6 +109,8 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 
 No invariant companion is published because every contribution — the frontend-static child plugin, the prompt sections, and the bash variable registration — is registry-disposed with the fiber, and each owning registry package carries that relation's invariant.
 
+The Agent-loop Loader row injects `workspaceRegistry`, so unfinished relocation recovery completes before a configured agent can open the affected identity.
+
 </details>
 
 -----

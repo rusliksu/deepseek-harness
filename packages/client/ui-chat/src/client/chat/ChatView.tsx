@@ -129,6 +129,7 @@ export function ChatView({
   const inbox = useProjection('inbox') as unknown as InboxState | undefined
   // Workspace root off the session list row: path summaries display relative to it.
   const cwd = useSessions(s => s.byId[sessionId]?.cwd)
+  const directoryContexts = useSession(s => s.directoryContexts)
   const fileImages = useMemo(() => ({
     resolve: (path: string) => fileMediaUrl(document.baseURI, resolveWorkspacePath(cwd, path)),
     labels: {
@@ -136,6 +137,7 @@ export function ChatView({
       dialog: t('image.dialog'), close: t('image.close'),
     },
   }), [cwd, t])
+  const markdownDelegate = useMemo(() => ({ openExternalLink, fileImages }), [openExternalLink, fileImages])
   const running = useSession(s => s.running)
   const openState = useSession(s => s.openState)
   const openError = useSession(s => s.openError)
@@ -266,6 +268,8 @@ export function ChatView({
                 useStore={useStore}
                 actions={actions}
                 cwd={cwd}
+                directoryContexts={directoryContexts}
+                markdownDelegate={markdownDelegate}
                 openFile={requestOpenFile}
                 openSkill={openSkill}
                 inspectCall={inspectCall}

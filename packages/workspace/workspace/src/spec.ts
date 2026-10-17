@@ -7,7 +7,8 @@
 
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset, type SessionId } from '@deepseek-ai/dsh-session'
+import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { WorkspaceId } from './types.ts'
 
@@ -42,6 +43,32 @@ const workspacePendingMutation = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('delete'), workspaceId }),
 ])
 
+const relocationRequest = z.object({
+  sessionId, operationId: z.uuid(), expectedCwd: z.string(),
+  expectedRevision: z.string().transform(SessionPersistenceRevision), targetWorkspaceId: workspaceId,
+})
+
+const relocationResult = z.object({
+  sessionId, operationId: z.uuid(), sourceCwd: z.string(), cwd: z.string(),
+  revision: z.string().transform(SessionPersistenceRevision),
+})
+
+const directoryContexts = z.array(z.object({
+  fromEvent: z.number().int().nonnegative().transform(SessionLogOffset), cwd: z.string().min(1),
+})).min(1).refine(contexts => contexts[0]?.fromEvent === 0
+  && contexts.every((context, index) => index === 0 || context.fromEvent > (contexts[index - 1]?.fromEvent ?? -1)),
+{ message: 'directory contexts must start at zero and have strictly increasing event offsets' })
+
+const workspaceRelocation = z.object({
+  request: relocationRequest,
+  sourceWorkspaceId: workspaceId,
+  source: workspaceRecord,
+  target: workspaceRecord,
+  status: z.enum(['prepared', 'completed', 'recovered']),
+  result: relocationResult.optional(),
+  directoryContexts: directoryContexts.optional(),
+})
+
 /**
  * Durable registry state. `initialized` distinguishes a valid empty registry
  * from one that still needs the header-only history bootstrap;
@@ -62,6 +89,10 @@ export const workspaceDomainState = z.object({
   archivedSessionIds: z.array(sessionId).default([]),
   pinnedSessionIds: z.array(sessionId).default([]),
   pendingMutation: workspacePendingMutation.optional(),
+  /** Exact retry outcomes and unfinished cross-owner recovery intents. */
+  relocations: z.record(z.string(), workspaceRelocation).default({}),
+  /** Independent event-directory history, including copied fork prefixes. */
+  directoryContexts: z.record(z.string(), directoryContexts).default({}),
 })
 
 /** Durable registry state inferred from {@link workspaceDomainState}. */
@@ -78,7 +109,7 @@ export const workspaceDomainSpec = defineDomain({
   version: 2,
   global: {
     schema: workspaceDomainState,
-    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [] },
+    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [], relocations: {}, directoryContexts: {} },
   },
   tables: { workspaces: domainTable<WorkspaceId, WorkspaceRecord>(workspaceRecord) },
 })

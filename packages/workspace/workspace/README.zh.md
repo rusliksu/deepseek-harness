@@ -128,6 +128,8 @@ ctx.workspaceRegistry.list() // shows the project, newest first
 
 `workspace-invariant` 伴生插件注册归属关系：`workspaces` 表的每个持久 `domain/changed` 都必须指向实体缓存已持有的记录——只有在注册表从缓存移除实体之后删除才有效，因此绕过注册表的写入路径会触发不变式失败。
 
+`relocateSession` 将原生生命周期操作与所有注册表和实体修改串行化。它在放置位置变化前保存原始源记录与目标记录，先移除源成员资格再添加目标成员资格，保留归档和置顶集合，并仅在验证与刷写之后记录成功。启动发布注册表之前，在独占会话所有权下回滚未完成操作。待恢复状态阻止进一步修改 Workspace，也阻止该会话的普通工作；已完成操作的 UUID 保留确切的重试结果。旧领域记录将新增的迁移历史默认为空对象。
+
 </details>
 
 -----
@@ -187,5 +189,7 @@ ctx.workspaceRegistry.list() // shows the project, newest first
 #### 开放：`create(path, title?)` 的 title 参数
 
 网关的按名称创建分支移除后，`title` 参数已无生产调用方；代码中的 TODO 提议把该参数与其 `@param` 子句一并移除（参见[笔记](../../../.agents/notes/archived/simplification/2026-07-31-one-route-to-add-a-workspace.md)）。
+
+`sessionDirectoryContexts` 在 Session 日志之外保留每段事件的目录。生命周期在发布前记录初始区间，将继承区间复制到分叉会话，并将下一区间与迁移结果一起提交。回滚保留原始区间。若旧元数据无法确定历史目录，主机拒绝迁移；普通聊天读取仍然可用。
 
 </details>

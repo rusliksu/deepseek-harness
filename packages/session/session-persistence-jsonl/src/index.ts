@@ -18,7 +18,7 @@ import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:f
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   SessionPersistence, SessionPersistenceRevision, SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
@@ -31,10 +31,16 @@ import {
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
 } from '@deepseek-ai/dsh-session-persistence'
-import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
+import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState, type JsonlWriteOwnership } from './storage.ts'
 import { SessionWriteLease } from './lease.ts'
 import { SESSION_FORMAT_VERSION, SessionId as makeSessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
+import type { SessionRelocationOptions, SessionRelocationRequest, SessionRelocationResult, SessionRelocationTransaction } from '@deepseek-ai/dsh-session-persistence'
+import {
+  assertRelocationRequest, checkPlacementBudget, checkRelocationSize, effectivePlacementHeader, initialPlacement,
+  placementRevision, readPlacement, readPlacementOperation, recoverPlacement, relocationFailure,
+  writePlacement, writePlacementOperation, type PlacementOperation, type SessionPlacement,
+} from './placement.ts'
 import {
   assertNoRetiredHeaderFields, encodeSegment, eventLines, generationLogFilename, generationLogPath, logPath, logSuffix,
   parseGenerationLogFilename, projectDir, scanLog, sessionDir, SessionLogScanner, toHeaderLine,
@@ -98,6 +104,12 @@ export interface Config {
   root: string
   /** Physical encoding; defaults to checksummed Zstandard frames. */
   compression?: JsonlCompression
+  /** Maximum physical generation size accepted for relocation, in bytes. */
+  relocationLogBytes?: number
+  /** Maximum session-owned data accepted for relocation, in bytes. */
+  relocationDataBytes?: number
+  /** Maximum local files accepted for relocation. */
+  relocationFiles?: number
 }
 
 /** One stored event graph whose producer has established immutable sharing. */
@@ -243,9 +255,13 @@ function waitWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<
  * flush, and never existed if the process crashes before that.
  */
 class JsonlSessionPersistence extends SessionPersistence {
+  override readonly supportsRelocation: boolean = true
   static Config: z<Config> = z.object({
     root: z.string().required(),
     compression: JsonlCompressionSchema,
+    relocationLogBytes: z.number().step(1).min(1).default(268435456),
+    relocationDataBytes: z.number().step(1).min(1).default(1073741824),
+    relocationFiles: z.number().step(1).min(1).default(10000),
   })
 
   /** Backend label for diagnostics and effects; shadows `Service.name` without changing the service key. */
@@ -301,6 +317,252 @@ class JsonlSessionPersistence extends SessionPersistence {
   }
 
   // --- SessionPersistence service API ---
+
+  /**
+   * Prepare a metadata-only directory change under the existing identity's lease.
+   * @param request - expected observation and caller-generated operation UUID.
+   * @param options - exact live writer, whose lease remains held through teardown.
+   * @returns an exclusive transaction; callers must close it in a finally block.
+   */
+  override beginRelocation(
+    request: SessionRelocationRequest, options?: SessionRelocationOptions,
+  ): Promise<SessionRelocationTransaction> {
+    const captured = Object.freeze({ ...request })
+    const ownership = options === undefined ? undefined : { ...options }
+    return this.tracker.runRelocation(captured.sessionId, () => this.prepareRelocation(captured, ownership))
+  }
+
+  private async prepareRelocation(
+    request: SessionRelocationRequest, options?: SessionRelocationOptions,
+  ): Promise<SessionRelocationTransaction> {
+    assertRelocationRequest(request)
+    await this.ensureRootEncoding()
+    const oldWriter = options?.writer
+    if (oldWriter !== undefined && (oldWriter.id !== request.sessionId || !this.tracker.ownsWriter(oldWriter))) {
+      throw relocationFailure('conflict')
+    }
+    let lease: JsonlWriteOwnership | undefined
+    let yielded = oldWriter === undefined
+    const transfer = oldWriter === undefined ? undefined : oldWriter.lendOwnership(() => {
+      yielded = true
+      this.tracker.retainClaim(oldWriter)
+    })
+    if (transfer === undefined) this.tracker.claimWrite(request.sessionId)
+    else lease = transfer.lease
+    let closed = false
+    let completed = false
+    let readyForWriter = false
+    let borrowed: { writer: JsonlSessionHandle; ownership: JsonlWriteOwnership } | undefined
+    let settlement = Promise.resolve()
+    const settle = <T>(operation: () => Promise<T>): Promise<T> => {
+      const result = settlement.then(operation)
+      settlement = result.then(() => undefined, () => undefined)
+      return result
+    }
+    const assertYielded = (): void => {
+      if (closed || completed || !yielded || borrowed !== undefined) throw relocationFailure('conflict')
+    }
+    const openWriter = (): Promise<SessionHandle> => settle(async () => {
+      assertYielded()
+      if (!readyForWriter) throw relocationFailure('conflict')
+      const selected = await this.findLog(request.sessionId)
+      if (selected === undefined) throw new SessionPersistenceNotFoundError(request.sessionId)
+      const stored = await this.requireStoredLog(request.sessionId)
+      const placement = await readPlacement(dirname(selected.sourcePath), request.sessionId)
+      const ownership: JsonlWriteOwnership = { release: () => {
+        if (borrowed === undefined) throw relocationFailure('conflict')
+        this.tracker.retainClaim(borrowed.writer)
+        borrowed = undefined
+        return Promise.resolve()
+      } }
+      const writer = this.tracker.adopt(new JsonlSessionHandle(this, request.sessionId,
+        effectivePlacementHeader(stored.meta, placement), 'write', {
+          cursor: stored.events.length, materialized: true, inheritedEventCount: stored.inheritedEventCount,
+          tornTruncateTo: stored.tornTruncateTo, recoveredTail: stored.recoveredTail, primed: stored,
+        }, ownership))
+      borrowed = { writer, ownership }
+      return writer
+    })
+    const complete = (writer: SessionHandle, commitRelated?: () => Promise<void>): Promise<void> => settle(async () => {
+      if (closed || completed || borrowed?.writer !== writer || lease === undefined) throw relocationFailure('conflict')
+      const current = borrowed
+      await current.writer.drainLive()
+      await current.writer.flush()
+      await commitRelated?.()
+      if (borrowed !== current) throw relocationFailure('conflict')
+      current.writer.acceptOwnership(current.ownership, lease)
+      lease = undefined
+      completed = true
+    })
+    const release = async (): Promise<void> => {
+      if (closed) return
+      if (!yielded && transfer?.cancel()) {
+        closed = true
+        lease = undefined
+        return
+      }
+      const failures: unknown[] = []
+      try { if (!yielded) await oldWriter?.close() } catch (error) { failures.push(error) }
+      try { if (!completed) await borrowed?.writer.close() } catch (error) { failures.push(error) }
+      closed = true
+      if (!completed) {
+        try { await lease?.release() } catch (error) { failures.push(error) }
+        this.tracker.releaseClaim(request.sessionId)
+      }
+      if (failures.length > 1) throw new AggregateError(failures, 'session relocation ownership release failed')
+      if (failures.length === 1) throw failures[0]
+    }
+    try {
+      const selected = await this.findLog(request.sessionId)
+      if (selected === undefined) throw new SessionPersistenceNotFoundError(request.sessionId)
+      if (selected.sourceVersion !== SESSION_FORMAT_VERSION) throw relocationFailure('unsupported')
+      const dir = dirname(selected.sourcePath)
+      lease ??= await this.acquireLease(request.sessionId, undefined, dir)
+      if (oldWriter !== undefined) {
+        await oldWriter.drainLive()
+        await oldWriter.flush()
+      }
+      const raw = await this.readGenerationHeader(selected, request.sessionId)
+      if (raw === undefined || raw.cwd === undefined) throw relocationFailure('unsupported')
+      const physicalRevision = fileRevision(await stat(selected.sourcePath, { bigint: true }))
+      await recoverPlacement(dir, raw, physicalRevision)
+      const existing = await readPlacement(dir, request.sessionId)
+      effectivePlacementHeader(raw, existing)
+      const previous = await readPlacementOperation(dir, request)
+      if (previous !== undefined && previous.before.originCwd !== raw.cwd) throw relocationFailure('recovery-required')
+      if (previous?.status === 'rolled-back') throw relocationFailure('conflict')
+      if (previous?.status === 'committed') {
+        const result = previous.result
+        if (result === undefined) throw relocationFailure('recovery-required')
+        readyForWriter = true
+        let rolledBack = false
+        return {
+          openWriter, complete,
+          commit: () => settle(() => {
+            assertYielded()
+            if (rolledBack) throw relocationFailure('conflict')
+            return Promise.resolve(result)
+          }),
+          rollback: () => settle(async () => {
+            assertYielded()
+            if (borrowed !== undefined || completed) throw relocationFailure('conflict')
+            if (rolledBack) return
+            if (existing?.revision !== previous.after.revision) throw relocationFailure('conflict')
+            const rollbackPlacement = { ...previous.before, revision: randomUUID() }
+            const operation: PlacementOperation = { ...previous, status: 'rolling-back', rollbackPlacement }
+            await writePlacementOperation(dir, operation)
+            await writePlacement(dir, rollbackPlacement)
+            await writePlacementOperation(dir, { ...operation, status: 'rolled-back' })
+            rolledBack = true
+            this.coldLogMemo.delete(request.sessionId)
+          }),
+          close: () => settle(release),
+        }
+      }
+      const before = existing ?? initialPlacement(raw)
+      const revision = placementRevision(physicalRevision, existing)
+      if (before.cwd !== request.expectedCwd || revision !== request.expectedRevision) throw relocationFailure('conflict')
+      await this.assertRelocationTarget(request.targetCwd)
+      const limits = {
+        logBytes: this.config.relocationLogBytes ?? 268435456,
+        dataBytes: this.config.relocationDataBytes ?? 1073741824,
+        files: this.config.relocationFiles ?? 10000,
+      }
+      const usage = await checkRelocationSize(dir, selected.sourcePath, limits)
+      const stored = await this.requireStoredLog(request.sessionId)
+      if (stored.status !== 'current' || stored.tornTruncateTo !== undefined || stored.recoveredTail.length > 0) {
+        throw relocationFailure('recovery-required')
+      }
+      const noOp = request.targetCwd === before.cwd
+      const after: SessionPlacement = noOp ? before : { ...before, cwd: request.targetCwd, revision: randomUUID() }
+      let operation: PlacementOperation = {
+        schemaVersion: 1, request, before, after, hadPlacement: existing !== undefined, status: 'prepared',
+      }
+      await checkPlacementBudget(dir, operation, physicalRevision, usage, limits)
+      await writePlacementOperation(dir, operation)
+      let committed: SessionRelocationResult | undefined
+      let rolledBack = false
+      let publicationStarted = false
+      const rollback = async (): Promise<void> => {
+        if (closed || completed || borrowed !== undefined) throw relocationFailure('conflict')
+        if (rolledBack) return
+        operation = { ...operation, status: 'rolling-back',
+          ...(publicationStarted && !noOp ? { rollbackPlacement: { ...before, revision: randomUUID() } } : {}) }
+        await writePlacementOperation(dir, operation)
+        if (operation.rollbackPlacement !== undefined) await writePlacement(dir, operation.rollbackPlacement)
+        operation = { ...operation, status: 'rolled-back' }
+        await writePlacementOperation(dir, operation)
+        rolledBack = true
+        readyForWriter = true
+        this.coldLogMemo.delete(request.sessionId)
+      }
+      return {
+        openWriter, complete,
+        commit: () => settle(async () => {
+          assertYielded()
+          if (rolledBack) throw relocationFailure('conflict')
+          if (committed !== undefined) return committed
+          if (fileRevision(await stat(selected.sourcePath, { bigint: true })) !== physicalRevision) throw relocationFailure('conflict')
+          await this.assertRelocationTarget(request.targetCwd)
+          if (!noOp) {
+            publicationStarted = true
+            if (existing === undefined) await writePlacement(dir, before)
+            await writePlacement(dir, after)
+          }
+          const result = { sessionId: request.sessionId, operationId: request.operationId,
+            sourceCwd: before.cwd, cwd: after.cwd, revision: noOp ? revision : placementRevision(physicalRevision, after) }
+          operation = { ...operation, status: 'committed', result }
+          await writePlacementOperation(dir, operation)
+          committed = result
+          readyForWriter = true
+          this.coldLogMemo.delete(request.sessionId)
+          return result
+        }),
+        rollback: () => settle(rollback),
+        close: () => settle(async () => {
+          try {
+            if (!closed && committed === undefined && !rolledBack) await rollback()
+          } finally {
+            await release()
+          }
+        }),
+      }
+    } catch (error) {
+      try {
+        await release()
+      } catch (releaseError) {
+        throw new AggregateError([error, releaseError], 'session relocation failed and ownership release failed')
+      }
+      throw error
+    }
+  }
+
+  /** Validate the canonical target again immediately before publication. */
+  private async assertRelocationTarget(cwd: string): Promise<void> {
+    try {
+      if (await realpath(cwd) === cwd && (await stat(cwd)).isDirectory()) return
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(String((error as NodeJS.ErrnoException).code))) throw error
+    }
+    throw Object.assign(new Error('session relocation target invalid'), { code: 'session/relocate-target-invalid' })
+  }
+
+  /** Read or recover placement metadata before exposing an effective directory. */
+  private async placementFor(header: SessionHeader, path: string, leaseHeld = false): Promise<SessionPlacement | undefined> {
+    const dir = dirname(path)
+    try {
+      return await readPlacement(dir, header.id)
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'session/relocate-recovery-required') throw error
+      const lease = leaseHeld ? undefined : await this.acquireLease(header.id, undefined, dir)
+      try {
+        await recoverPlacement(dir, header, fileRevision(await stat(path, { bigint: true })))
+        return await readPlacement(dir, header.id)
+      } finally {
+        await lease?.release()
+      }
+    }
+  }
 
   /**
    * Create a new stored session and take its write ownership. The session is
@@ -370,7 +632,9 @@ class JsonlSessionPersistence extends SessionPersistence {
           inheritedEventCount: stored.inheritedEventCount,
         }
       }
-      return this.tracker.adopt(new JsonlSessionHandle(this, id, stored.meta, 'read', state))
+      const selected = await this.findLog(id, options?.signal)
+      const placement = selected === undefined ? undefined : await this.placementFor(stored.meta, selected.sourcePath)
+      return this.tracker.adopt(new JsonlSessionHandle(this, id, effectivePlacementHeader(stored.meta, placement), 'read', state))
     }
     // A pending entry always belongs to an ACTIVE creator handle (close erases
     // it), so the claim below rejects that case as already owned.
@@ -380,6 +644,10 @@ class JsonlSessionPersistence extends SessionPersistence {
       const resolved = await this.findLog(id, options?.signal)
       if (resolved === undefined) throw new SessionPersistenceNotFoundError(id)
       lease = await this.acquireLease(id, undefined, dirname(resolved.currentPath))
+      const rawHeader = await this.readGenerationHeader(resolved, id, options?.signal)
+      if (rawHeader !== undefined) {
+        await recoverPlacement(dirname(resolved.sourcePath), rawHeader, fileRevision(await stat(resolved.sourcePath, { bigint: true })))
+      }
       const prepared = await this.requireStoredLog(id, options?.signal)
       options?.signal?.throwIfAborted()
       let stored: CurrentStoredLog
@@ -389,7 +657,8 @@ class JsonlSessionPersistence extends SessionPersistence {
         stored = prepared
       }
       options?.signal?.throwIfAborted()
-      return this.tracker.adopt(new JsonlSessionHandle(this, id, stored.meta, 'write', {
+      const placement = await this.placementFor(stored.meta, resolved.sourcePath, true)
+      return this.tracker.adopt(new JsonlSessionHandle(this, id, effectivePlacementHeader(stored.meta, placement), 'write', {
         cursor: stored.events.length,
         materialized: true,
         tornTruncateTo: stored.tornTruncateTo,
@@ -449,14 +718,15 @@ class JsonlSessionPersistence extends SessionPersistence {
     if (selected === undefined) return undefined
     const header = await this.readGenerationHeader(selected, id, options?.signal)
     if (header === undefined) return undefined
+    const placement = await this.placementFor(header, selected.sourcePath)
     try {
       const identity = await stat(selected.sourcePath, { bigint: true })
       options?.signal?.throwIfAborted()
       return {
-        header,
-        revision: selected.sourceVersion < SESSION_FORMAT_VERSION
+        header: effectivePlacementHeader(header, placement),
+        revision: placementRevision(selected.sourceVersion < SESSION_FORMAT_VERSION
           ? SessionPersistenceRevision(`${fileRevision(identity)}:${await this.historicalCorpusRevision(options?.signal)}`)
-          : fileRevision(identity),
+          : fileRevision(identity), placement),
         sizeBytes: Number(identity.size),
       }
     } catch (error: unknown) {
@@ -487,13 +757,14 @@ class JsonlSessionPersistence extends SessionPersistence {
       signal?.throwIfAborted()
       try {
         const identity = await stat(artifact.path, { bigint: true })
+        const placement = await this.placementFor(artifact.header, artifact.path)
         signal?.throwIfAborted()
         listed.add(artifact.header.id)
         snapshots.push({
-          header: artifact.header,
-          revision: artifact.sourceVersion < SESSION_FORMAT_VERSION
+          header: effectivePlacementHeader(artifact.header, placement),
+          revision: placementRevision(artifact.sourceVersion < SESSION_FORMAT_VERSION
             ? SessionPersistenceRevision(`${fileRevision(identity)}:${corpusRevision}`)
-            : fileRevision(identity),
+            : fileRevision(identity), placement),
           sizeBytes: Number(identity.size),
         })
       } catch (error: unknown) {
@@ -1323,7 +1594,7 @@ class JsonlSessionPersistence extends SessionPersistence {
    */
   private async appendLines(meta: SessionHeader, events: readonly SessionEvent[]): Promise<void> {
     const content = await this.encodeEventBatch(events)
-    const path = logPath(this.root, meta.cwd, meta.id, this.compression)
+    const path = await this.writableLogPath(meta)
     const handle = await open(path, 'a')
     let closed = false
     const closeAppendHandle = async (): Promise<void> => {
@@ -1363,7 +1634,7 @@ class JsonlSessionPersistence extends SessionPersistence {
 
   /** Truncate the log file to `offset` bytes and fsync (discard the crash tail). */
   private async repair(meta: SessionHeader, offset: number): Promise<void> {
-    const path = logPath(this.root, meta.cwd, meta.id, this.compression)
+    const path = await this.writableLogPath(meta)
     await truncate(path, offset)
     const handle = await open(path, 'r+')
     try {
@@ -1374,6 +1645,15 @@ class JsonlSessionPersistence extends SessionPersistence {
   }
 
   // --- discovery helpers ---
+
+  /** Keep appends and tail repair in their original physical generation. */
+  private async writableLogPath(meta: SessionHeader): Promise<string> {
+    const path = await this.resolveCurrentLog(meta.id)
+    if (path === undefined) throw new SessionPersistenceNotFoundError(meta.id)
+    const placement = await readPlacement(dirname(path), meta.id)
+    if (placement !== undefined && placement.cwd !== meta.cwd) throw relocationFailure('conflict')
+    return path
+  }
 
   /**
    * Read the first newline-terminated line of a file without loading the whole

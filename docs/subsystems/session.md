@@ -766,6 +766,10 @@ The backends that consume this contract are on [persistence.md](persistence.md).
 
 The optional `application` selects a registered file handler without changing the system default; `workspacePathApplications({ path })` returns current handlers, names, icons, and default selection after Host path verification.
 
+## History directory metadata
+
+`SessionPage` and the opening `SessionFollowFrame` may carry `directoryContexts`. The Client publishes these ranges in `SessionSnapshot` with the history window; a relocation reopens the stream with a replacement baseline. The ranges use [Workspace event directories](workspace.md#history-directory-contexts) and do not alter Session events.
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -818,6 +822,22 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
  * @returns the Session identity and resolved preset when configured.
  */
 @Remote('create') create(request: SessionCreateRequest): Promise<SessionCreateValue>
+
+/**
+ * Observe relocation support and the exact persisted revision without resuming a chat.
+ * @param request - existing ordinary Session identity.
+ * @param signal - cancellation for the header observation.
+ * @returns support and the current directory/revision when the Session exists.
+ */
+@Remote('relocationInfo') async relocationInfo(request: { readonly sessionId: SessionId }, signal: AbortSignal): Promise<SessionRelocationInfo>
+
+/**
+ * Move one idle chat to an existing registered local project without moving its files.
+ * @param request - destination, exact source observation, and stable operation UUID.
+ * @param signal - caller cancellation before durable work is admitted.
+ * @returns the verified same-ID chat and final persisted revision.
+ */
+@Remote('relocate') async relocate(request: SessionRelocateRequest, signal: AbortSignal): Promise<SessionRelocateValue>
 
 /**
  * Select one Session-local model after explicitly resuming the Session; save the default in the background.

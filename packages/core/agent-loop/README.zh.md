@@ -128,6 +128,8 @@ const handle = await ctx.agents.create({
 
 关闭失败步骤之前，驱动器为每个尚无结果的 assistant 工具调用记录错误结果。已有 `tool/call` 记录但尚无已提交结果的调用获得 `TOOL_OUTCOME_UNKNOWN`；没有调用记录的请求获得 `TOOL_NOT_STARTED`。已提交的结果保持完整，已启动的派发先结算再恢复，轮次保留原始失败。这些结果让后续请求使用配对完整的工具历史，而不自动重试结果不明的操作（[决策](../../../.agents/notes/implemented/bug-fix/2026-09-19-failed-step-tool-results.zh.md)）。
 
+迁移在任何异步工作之前预留确切的会话身份。持有预留期间，普通工厂调用、收件箱修改、维护以及已准入的 API 或后台操作无法进入。替换空闲且归属明确的实例时，内核写入租约覆盖拆卸、关联记录协调、重建和最终刷写。回滚失败时保留所有权直到关闭；Web 组合在激活配置的 agent 之前恢复未完成的迁移。退役实例永久拒绝新输入。
+
 </details>
 
 -----
@@ -225,5 +227,7 @@ const handle = await ctx.agents.create({
 <summary>维护者的工作上下文——点击展开</summary>
 
 无。
+
+生命周期在发布前通过 Workspace 记录事件目录区间，并向迁移操作提供静止状态下的事件边界。Session 日志保持不变；区间元数据保留相对引用的含义。
 
 </details>

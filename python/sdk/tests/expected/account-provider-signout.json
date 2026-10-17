@@ -7,5 +7,6 @@
       "kind": "hook",
       "reason": "deepseek-account/signed-out"
     }
-  }
+  },
+  "status": "idle"
 }

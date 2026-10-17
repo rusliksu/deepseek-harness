@@ -848,6 +848,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionEventChange = {\n    readonly kind: \'replace\';\n    readonly entries: readonly SessionEventLikeEntry[];\n} | {\n    readonly kind: \'prepend\';\n    readonly entries: readonly SessionEventLikeEntry[];\n} | {\n    readonly kind: \'append\';\n    readonly entries: readonly SessionEventLikeEntry[];\n} | {\n    readonly kind: \'settle-assistant\';\n    readonly attemptId: LlmAttemptId;\n    readonly entry?: SessionAssistantSettlementEntry;\n};',
   },
   {
+    name: 'SessionEventEntry',
+    declaration: 'export interface SessionEventEntry {\n    readonly type: \'event\';\n    readonly event: SessionWireEvent;\n}',
+  },
+  {
     name: 'SessionEventLikeEntry',
     declaration: 'export type SessionEventLikeEntry = {\n    readonly type: \'event\';\n    readonly event: SessionEvent;\n} | {\n    readonly type: \'transient\';\n    readonly event: AssistantLiveChunkEvent;\n};',
   },
@@ -864,12 +868,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionFace = ISession & ObservableSnapshot<SessionSnapshot>;',
   },
   {
+    name: 'SessionHistoryRecord',
+    declaration: 'export type SessionHistoryRecord = SessionEventEntry;',
+  },
+  {
     name: 'SessionIdOf',
     declaration: 'export type SessionIdOf = SessionStandardProps extends {\n    sessionId: infer S;\n} ? S : string;',
   },
   {
     name: 'SessionMaybeStandardProps',
     declaration: 'export interface SessionMaybeStandardProps {\n}',
+  },
+  {
+    name: 'SessionPage',
+    declaration: 'export interface SessionPage {\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n    readonly directoryContexts?: readonly SessionDirectoryContext[];\n}',
   },
   {
     name: 'SessionProviderComponent',
@@ -905,7 +917,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionSnapshot',
-    declaration: 'export interface SessionSnapshot {\n    readonly sessionId: SessionId;\n    readonly pendingSubmissions: readonly PendingSubmission[];\n    readonly running: boolean;\n    readonly subagent: {\n        readonly address: SubagentAddress;\n        readonly parentAvailable?: boolean;\n    } | null;\n    readonly removed: boolean;\n    readonly openState: OpenState;\n    readonly openError: RemoteFailure | null;\n    readonly hasMore: boolean;\n    readonly loadingOlder: boolean;\n    readonly promptError: PromptError | null;\n    readonly blank: boolean;\n    readonly lastAgentError: string | null;\n    readonly promptAttempted: boolean;\n    readonly awaitingFirstTurn: boolean;\n}',
+    declaration: 'export interface SessionSnapshot {\n    readonly sessionId: SessionId;\n    readonly directoryContexts?: SessionPage[\'directoryContexts\'];\n    readonly pendingSubmissions: readonly PendingSubmission[];\n    readonly running: boolean;\n    readonly subagent: {\n        readonly address: SubagentAddress;\n        readonly parentAvailable?: boolean;\n    } | null;\n    readonly removed: boolean;\n    readonly openState: OpenState;\n    readonly openError: RemoteFailure | null;\n    readonly hasMore: boolean;\n    readonly loadingOlder: boolean;\n    readonly promptError: PromptError | null;\n    readonly blank: boolean;\n    readonly lastAgentError: string | null;\n    readonly promptAttempted: boolean;\n    readonly awaitingFirstTurn: boolean;\n}',
   },
   {
     name: 'SessionStandardProps',
@@ -914,6 +926,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionTarget',
     declaration: 'export type SessionTarget = SessionId | SubagentAddress;',
+  },
+  {
+    name: 'SessionWireEvent',
+    declaration: 'export interface SessionWireEvent {\n    readonly type: string;\n    readonly seq: number;\n    readonly time: number;\n    readonly data: JsonValue;\n    readonly ignorable?: true;\n    readonly sourceEventSeqs?: JsonValue;\n    readonly surfaceOp?: JsonValue;\n}',
   },
   {
     name: 'SlotComponent',

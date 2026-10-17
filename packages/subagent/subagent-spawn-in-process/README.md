@@ -82,6 +82,8 @@ A start request resolves through the subagent service, then the shared driver va
 
 The child gets a fresh flat registration scope: parent tool restrictions and authority are never imported, and the filter the tool applies is composition, not a parent-derived grant. The backend advertises all five start-time capabilities, including `agentOptions`, because it controls the child's creation window and can enforce each one.
 
+Spawn holds its parent Agent operation admission through child startup. A parent reserved for relocation cannot start a new in-process child; resident owned children also prevent replacement of their parent incarnation.
+
 </details>
 
 -----

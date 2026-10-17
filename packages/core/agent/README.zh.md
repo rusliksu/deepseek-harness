@@ -117,6 +117,8 @@ await handle.agent.whenIdle()
 
 `AgentHandle` disposer 是一项能力：在消费方中，只有其持有者能拆除该 agent。已注册的工厂提供方是结构化共同拥有者，因为作用域 agent 依赖该提供方的服务 API；提供方卸载会停止并排空它创建的每个实时句柄。`ctx.agents.get(id)` 仍返回裸 `Agent`——句柄只暴露给创建它的消费方。
 
+具象工厂实现 `agent/admit-operation`：执行器在首次副作用之前获取可释放的准入结果，并持有至异步准备与注册完成。工厂拒绝已为迁移预留的身份。原生所有者通过串行 `agent/relocation-check` 在独有状态无法重建时拒绝拆卸。
+
 </details>
 
 -----

@@ -21,7 +21,7 @@ import type {
   ConversationSnapshot, ConversationViewSnapshotStore, GroupKey, GroupSnapshot, NodeKey, TurnLocation,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionLogOffset, SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionStatusSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
 import type { KeyedSnapshotSelectorHook, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
@@ -576,6 +576,30 @@ function formatRunDuration(ms: number, t: Parameters<typeof durationParts>[1]): 
 }
 
 describe('Chat node rendering', () => {
+
+  it('keeps historical file links and images in their event directory after relocation', () => {
+    vi.spyOn(document, 'baseURI', 'get').mockReturnValue('http://127.0.0.1:3080/')
+    const h = makeHarness({
+      nodes: [user(1, 'explain'), assistant(2, '[old file](same.txt#L24) ![old image](same.png)', 1),
+        user(5, 'continue'), assistant(6, '[new file](same.txt) ![new image](same.png)', 2)],
+      turnEnds: new Map([[1, 2], [2, 6]]),
+      directoryContexts: [{ fromEvent: SessionLogOffset(0), cwd: '/project-a' },
+        { fromEvent: SessionLogOffset(4), cwd: '/project-b' }],
+    })
+    h.props.useSessions = bindSnapshotSelector(createSnapshotStore<SessionListState>({
+      ids: [SID], byId: { [SID]: { id: SID, displayTitle: 'Moved chat', updatedAt: 0, running: false, blank: false,
+        retainedBy: {}, cwd: '/project-b' } }, phase: 'ready', projectionsBySession: {},
+    }))
+    const view = render(<h.ChatView {...h.props} />)
+    fireEvent.click(view.getByRole('button', { name: 'old file' }))
+    fireEvent.click(view.getByRole('button', { name: 'new file' }))
+    expect(h.openFile).toHaveBeenNthCalledWith(1, '/project-a/same.txt', { line: 24 })
+    expect(h.openFile).toHaveBeenNthCalledWith(2, '/project-b/same.txt')
+    const oldImage = view.getByAltText('old image')
+    const newImage = view.getByAltText('new image')
+    expect(new URL(oldImage.getAttribute('src')!).searchParams.get('path')).toBe('/project-a/same.png')
+    expect(new URL(newImage.getAttribute('src')!).searchParams.get('path')).toBe('/project-b/same.png')
+  })
 
   it('opens Markdown references to unmodified files with line navigation', () => {
     const h = makeHarness({

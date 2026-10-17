@@ -1,5 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { JsonBlock } from '@deepseek-ai/dsh-client-ui-primitives'
+import { JsonBlock, MarkdownDelegateProvider } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MarkdownDelegate } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
+import { fileMediaUrl, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConversationLocationDataStore, ConversationTurnDataMap } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatNodeHookContext, ChatNodeOwnerProps, ChatViewSlotProps, UsePresentation } from '../contract/slots.ts'
@@ -11,6 +14,8 @@ import { useSearchableHidden } from './searchable-hidden.ts'
 import css from './ChatView.module.css'
 
 interface ChatNodeSeatProps extends ChatNodeOwnerProps {
+  readonly directoryContexts?: SessionSnapshot['directoryContexts']
+  readonly markdownDelegate?: MarkdownDelegate
   readonly nodeKey: string
   /** A replaced Builder must rebind keyed hooks even when references and keys survive. */
   readonly nodeStore: ChatNodeStore
@@ -44,11 +49,20 @@ function turnOf(node: ChatNode | undefined): number | undefined {
  */
 export const ChatNodeSeat = memo(function ChatNodeSeat({
   nodeKey, groupPart, useChatNode, useChatNodeProcess, usePresentation,
-  cwd, openFile, openSkill, inspectCall, forkAt,
+  cwd: currentCwd, directoryContexts, markdownDelegate, openFile: currentOpenFile, openSkill, inspectCall, forkAt,
   loadImage, renderMessageImages, fileMentions, useStore, actions, renderSlot, t,
 }: ChatNodeSeatProps) {
   const node = useChatNode(nodeKey)
   const routedNode = node as ChatNode | undefined
+  const cwd = routedNode === undefined ? currentCwd
+    : directoryContexts?.findLast(context => context.fromEvent <= routedNode.anchorSeq)?.cwd ?? currentCwd
+  const openFile = useCallback<ChatNodeOwnerProps['openFile']>((path, options) => {
+    currentOpenFile(resolveWorkspacePath(cwd, path), options)
+  }, [currentOpenFile, cwd])
+  const fileImages = useMemo(() => markdownDelegate?.fileImages === undefined ? undefined : {
+    ...markdownDelegate.fileImages,
+    resolve: (path: string) => fileMediaUrl(document.baseURI, resolveWorkspacePath(cwd, path)),
+  }, [cwd, markdownDelegate?.fileImages])
   const turn = turnOf(routedNode)
   const processPresentation = useChatNodeProcess(nodeKey)
   const processSpec = processPresentation?.spec
@@ -158,17 +172,19 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
       data-turn-process-hidden={processHidden || undefined}
       data-turn-process-answer={compactAnswer || undefined}
     >
-      {renderSlot('conversation.chat.node', routedOwner, {
-        entryKey: routedNode.kind,
-        hookContext,
-        fallback: (
-          <JsonBlock
-            label={t('message.unknownSurface', { type: routedNode.kind })}
-            payload={routedNode.data}
-            truncatedLabel={total => t('json.truncated', { total })}
-          />
-        ),
-      })}
+      <MarkdownDelegateProvider openFile={openFile} openExternalLink={markdownDelegate?.openExternalLink} fileImages={fileImages}>
+        {renderSlot('conversation.chat.node', routedOwner, {
+          entryKey: routedNode.kind,
+          hookContext,
+          fallback: (
+            <JsonBlock
+              label={t('message.unknownSurface', { type: routedNode.kind })}
+              payload={routedNode.data}
+              truncatedLabel={total => t('json.truncated', { total })}
+            />
+          ),
+        })}
+      </MarkdownDelegateProvider>
     </div>
   )
 })

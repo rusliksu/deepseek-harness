@@ -21,8 +21,11 @@
   en: 37c10302bbbde268
   zh: 3d5c027bac868efd
 /deepseek-ai-dsh-session-persistence-jsonl/use-this-package/minimal-configuration:
-  en: 22e8c3b2da45edff
-  zh: d9effd892b514520
+  en: eab799b4ca2f7de6
+  zh: c4e21cd6e6d1c4c9
+/deepseek-ai-dsh-session-persistence-jsonl/use-this-package/working-directory-transactions:
+  en: e00d99363cf624e4
+  zh: da15027334e404de
 /deepseek-ai-dsh-session-persistence-jsonl/use-this-package/on-disk-layout:
   en: e20cf32540d7c785
   zh: 67e182529e9211ca

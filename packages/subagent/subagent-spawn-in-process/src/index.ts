@@ -51,11 +51,14 @@ class SpawnInProcessProvider implements SubagentProvider {
 
   constructor(readonly name: string) {}
 
-  start(request: ResolvedSubagentStartRequest) {
+  async start(request: ResolvedSubagentStartRequest) {
+    using _admission = request.parent.ctx.bail('agent/admit-operation', {
+      sessionId: request.parent.id, agent: request.parent,
+    })
     // Fresh child: no seed. The shared driver mints ids, stamps cwd/lineage/
     // depth, drives the one-shot (including the structured capture when the
     // request carries an outputSchema), and maps the result.
-    return startInProcessRun(request, {})
+    return await startInProcessRun(request, {})
   }
 
   prepareContinuable(): Promise<ContinuableCreateSpec> {

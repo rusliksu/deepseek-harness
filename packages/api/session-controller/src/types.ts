@@ -10,7 +10,7 @@ import type { TextBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionId, SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
+import type { SessionDirectoryContext, WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
@@ -101,6 +101,34 @@ export interface ModelSelection {
   readonly provider: string
   readonly model: string
   readonly reasoningEffort?: string
+}
+
+/** Exact user observation used to relocate one existing ordinary Session. */
+export interface SessionRelocateRequest {
+  readonly sessionId: SessionId
+  readonly targetWorkspaceId: WorkspaceId
+  readonly operationId: string
+  readonly expectedCwd: string
+  readonly expectedRevision: string
+}
+
+/** Durable result after placement, membership, runtime context, and flush agree. */
+export interface SessionRelocateValue {
+  readonly sessionId: SessionId
+  readonly sourceWorkspaceId: WorkspaceId
+  readonly targetWorkspaceId: WorkspaceId
+  readonly cwd: string
+  readonly revision: string
+  readonly operationId: string
+}
+
+/** Lightweight observation for a move dialog without activating the Session. */
+export interface SessionRelocationInfo {
+  readonly supported: boolean
+  readonly cwd?: string
+  readonly revision?: string
+  /** Event-directory epochs used to resolve historical relative references. */
+  readonly directoryContexts?: readonly SessionDirectoryContext[]
 }
 
 /** Host fold state for durable model selection. */
@@ -201,6 +229,11 @@ export const SESSION_SEARCH_SNIPPET_MAX_CODE_POINTS = 240
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
+    'session/relocate-busy': { readonly sessionId: SessionId }
+    'session/relocate-conflict': { readonly sessionId: SessionId }
+    'session/relocate-target-invalid': { readonly sessionId: SessionId }
+    'session/relocate-unsupported': { readonly sessionId: SessionId }
+    'session/relocate-recovery-required': { readonly sessionId: SessionId }
     'session/provider-credentials-unavailable': Record<string, never>
     'session/provider-models-unavailable': { readonly provider: string }
     'session/model-unavailable': { readonly provider: string; readonly model: string }
@@ -546,6 +579,8 @@ export type SessionAssistantStreamFrame =
 export interface SessionPage {
   readonly records: readonly SessionHistoryRecord[]
   readonly hasMore: boolean
+  /** Independent directory history; absent on hosts without relocation support. */
+  readonly directoryContexts?: readonly SessionDirectoryContext[]
 }
 
 /** Complete opening window followed by ordered durable events and opted-in assistant frames. */
@@ -557,6 +592,7 @@ export type SessionFollowFrame =
     readonly records: readonly SessionHistoryRecord[]
     readonly hasMore: boolean
     readonly projections: SessionProjectionBaseline
+    readonly directoryContexts?: readonly SessionDirectoryContext[]
     readonly assistantStream?: SessionAssistantStreamBaseline
   }
   | SessionEventEntry

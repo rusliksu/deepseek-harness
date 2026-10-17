@@ -1,1 +1,1 @@
-{"sessionId":"{{sessionId}}","finalResponse":"CODE_ONE+CODE_TWO"}
+{"sessionId":"{{sessionId}}","finalResponse":"CODE_ONE+CODE_TWO","reason":{"kind":"completed"},"status":"idle"}
