@@ -1,1 +1,1 @@
-{"sessionId":"{{sessionId}}","finalResponse":"Before sign-out"}
+{"sessionId":"{{sessionId}}","finalResponse":"Before sign-out","reason":{"kind":"aborted","reason":{"kind":"hook","reason":"deepseek-account/signed-out"}},"status":"idle"}

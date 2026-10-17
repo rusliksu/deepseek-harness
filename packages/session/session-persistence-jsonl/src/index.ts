@@ -383,11 +383,12 @@ class JsonlSessionPersistence extends SessionPersistence {
       borrowed = { writer, ownership }
       return writer
     })
-    const complete = (writer: SessionHandle): Promise<void> => settle(async () => {
+    const complete = (writer: SessionHandle, commitRelated?: () => Promise<void>): Promise<void> => settle(async () => {
       if (closed || completed || borrowed?.writer !== writer || lease === undefined) throw relocationFailure('conflict')
       const current = borrowed
       await current.writer.drainLive()
       await current.writer.flush()
+      await commitRelated?.()
       if (borrowed !== current) throw relocationFailure('conflict')
       current.writer.acceptOwnership(current.ownership, lease)
       lease = undefined
@@ -434,10 +435,27 @@ class JsonlSessionPersistence extends SessionPersistence {
         const result = previous.result
         if (result === undefined) throw relocationFailure('recovery-required')
         readyForWriter = true
+        let rolledBack = false
         return {
           openWriter, complete,
-          commit: () => settle(() => { assertYielded(); return Promise.resolve(result) }),
-          rollback: () => settle(() => Promise.reject(relocationFailure('conflict'))),
+          commit: () => settle(() => {
+            assertYielded()
+            if (rolledBack) throw relocationFailure('conflict')
+            return Promise.resolve(result)
+          }),
+          rollback: () => settle(async () => {
+            assertYielded()
+            if (borrowed !== undefined || completed) throw relocationFailure('conflict')
+            if (rolledBack) return
+            if (existing?.revision !== previous.after.revision) throw relocationFailure('conflict')
+            const rollbackPlacement = { ...previous.before, revision: randomUUID() }
+            const operation: PlacementOperation = { ...previous, status: 'rolling-back', rollbackPlacement }
+            await writePlacementOperation(dir, operation)
+            await writePlacement(dir, rollbackPlacement)
+            await writePlacementOperation(dir, { ...operation, status: 'rolled-back' })
+            rolledBack = true
+            this.coldLogMemo.delete(request.sessionId)
+          }),
           close: () => settle(release),
         }
       }

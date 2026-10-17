@@ -182,6 +182,7 @@ export class ApprovalService extends Service {
    * @param policy - the new effective policy.
    */
   setPolicy(agent: Agent, policy: ApprovalPolicy): void {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: agent.id, agent })
     const previous = this.effectivePolicy(agent.session)
     if (previous === policy) return
     setApprovalPolicy(agent.session, policy)

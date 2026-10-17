@@ -76,6 +76,8 @@ Historical `schedule/change` events retain `LegacyScheduleRecord` (`after`, `at`
 
 The `schedule.archiveAdmission()` effect answers the Workspace registry's archive admission ([seam](../../workspace/workspace/README.md)) for every Session. Host tasks outlive their Session's Agent, so admission reads the stored rows rather than a live runtime or a Session-log fold: `workspace/session-activity` reports that Session's active Host tasks as the `schedule` family, one item per task with its stored id and title as label, and prepends that family to `next()` so other families keep their entries; `workspace/session-stop` removes those rows in one slot of the same serialized queue the tools use, so the stop is ordered behind a create whose write is still in flight; it deletes the rows directly, because re-entering the public `delete` from inside that queue would deadlock. A Session with no active Host task reports nothing and has nothing to stop.
 
+Create, update, and delete hold native Agent operation admission across queue waits and durable writes. A Session relocation refuses these mutations before their first side effect; existing active reminders independently make relocation busy.
+
 </details>
 
 <a id="further-exploration"></a>

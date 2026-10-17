@@ -109,6 +109,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 不发布不变式伴生入口，因为每项贡献——frontend-static 子插件、提示词段落与 bash 变量注册——都会随 fiber 由注册表释放，且每个所属注册表的包负责该关系的不变式。
 
+Agent-loop 的 Loader 条目注入 `workspaceRegistry`，因此配置的 agent 打开相关身份之前，会先完成未完成的迁移恢复。
+
 </details>
 
 -----

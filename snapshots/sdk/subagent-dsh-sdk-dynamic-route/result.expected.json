@@ -1,1 +1,1 @@
-{"sessionId":"{{sessionId}}","finalResponse":"child reported:\nchild route: mock/mock-routed/max/777; cwd: {{cwd}}"}
+{"sessionId":"{{sessionId}}","finalResponse":"child reported:\nchild route: mock/mock-routed/max/777; cwd: {{cwd}}","reason":{"kind":"completed"},"status":"idle"}

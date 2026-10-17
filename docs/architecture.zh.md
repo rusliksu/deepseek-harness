@@ -4,8 +4,6 @@
 
 改动 `packages/` 下的任何内容之前，请先阅读本文。本文假定你已了解 Cordis；如果尚未了解，请先阅读[入门](cordis-primer.zh.md)或[教程](cordis-tutorial/index.zh.md)。
 
-建议使用 agent（智能体）探索代码库并理解其架构。
-
 ## Cordis
 
 [Cordis](cordis-primer.zh.md) 是 dsh 底层的框架：插件向共享上下文贡献服务、类型化事件和可逆的副作用。产品的每一部分都是插件，包括模型适配器、工具注册表、会话日志，以及 agent loop（智能体循环）本身，因此每个都可以从配置替换。
@@ -84,6 +82,8 @@ AgentLoop 在启动已排队工作前等待串行 `agent/created` 初始化。�
 [事件映射](event-producer-consumer.zh.md)列出每个事件的生产方与消费方。
 
 <a id="turn-flow"></a>
+
+会话迁移在 Workspace 记录成员归属时持续持有身份准入和写入租约。Web 启动等待恢复完成。
 
 ## 轮次流程
 

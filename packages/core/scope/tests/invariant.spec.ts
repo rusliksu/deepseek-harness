@@ -4,6 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Events } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { scopeTarget } from '@deepseek-ai/dsh-scope'
+import type { Scoped } from '@deepseek-ai/dsh-scope'
 import * as ScopeInvariant from '@deepseek-ai/dsh-scope/invariant'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
 
@@ -21,7 +22,9 @@ function emit(ctx: Context, receiver: object | undefined, event: string, args: u
 }
 
 describe('scoped-dispatch invariants', () => {
-  type AgentEventName = Extract<keyof Events, `agent/${string}`>
+  type AgentEventName = {
+    [K in Extract<keyof Events, `agent/${string}`>]: ThisParameterType<Events[K]> extends Scoped<Agent> ? K : never
+  }[Extract<keyof Events, `agent/${string}`>]
   type EventArgs<K extends keyof Events> = Events[K] extends (...args: infer Args) => unknown ? Args : never
 
   it('ignores ordinary events and rejects a scoped dispatch without a carrier', async () => {
@@ -45,6 +48,7 @@ describe('scoped-dispatch invariants', () => {
       source: { kind: 'user' },
     })
     const agentRows = {
+      'agent/relocation-check': [{ agent }],
       'agent/created': [{ agent, source: 'startup' }],
       'agent/disposed': [{ agent }],
       'agent/status': [{ agent, status: 'idle' }],

@@ -47,4 +47,45 @@ jobs:
           packages/session/session-persistence-jsonl/tests/generation.spec.ts
           packages/session/session-persistence-jsonl/tests/zstd.spec.ts
           packages/session/session-persistence/tests/storage-contract.spec.ts
+          packages/core/agent-loop/tests/relocation-admission.spec.ts
+          packages/core/agent-loop/tests/relocation-lifecycle.spec.ts
+          packages/core/agent-loop/tests/relocation-context.spec.ts
+          packages/core/scope/tests/invariant.spec.ts
+          packages/api/session-controller/tests/session-relocation.host.spec.ts
+          packages/api/session-controller/tests/commands-upload-file.host.spec.ts
+          packages/workspace/workspace/tests/workspace.spec.ts
+          packages/terminal/terminal/tests/service.spec.ts
+          packages/jobs/jobs-local/tests/jobs.spec.ts
+          packages/schedule/schedule/tests/plugin.spec.ts
           --testTimeout 15000
+
+  sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+      DSH_SNAPSHOT: replay
+      DSH_SNAPSHOT_MAX_CONCURRENCY: '1'
+      DSH_SNAPSHOT_MAX_WORKERS: '1'
+      PYTHONPATH: python/sdk/src:python/sdk-runtime/src
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: pnpm install --ignore-scripts --frozen-lockfile
+      - run: pnpm run build:native-system
+      - run: pnpm run build:lib:host
+      - name: Recorded SDK lifecycle projections
+        run: >-
+          node node_modules/vitest/vitest.mjs run --config vitest.snapshot.config.ts
+          snapshots/sdk/sdk.snapshot.ts
+          -t 'replays (account-provider-signout|bash-tool|dynamic-tool-updates|persistent-tools|ptc-turn|subagent-dsh-sdk-diagnostic|subagent-dsh-sdk-dynamic-route|subagent-spawn-in-process|system-prompt-in-history|text-turn|tool-error-details|tool-scheduler-recovery) through'
+      - run: python -m pip install pytest pydantic
+      - run: python -m pytest python/sdk/tests/test_account_provider_snapshot.py -q --tb=short

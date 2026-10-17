@@ -76,6 +76,8 @@ Schedule domain 声明整 unit 布局，因为任务是权威数据。路由到 
 
 `schedule.archiveAdmission()` effect 为每个会话回答 Workspace 注册表的归档准入（[接缝](../../workspace/workspace/README.zh.md)）。宿主任务比其会话的 Agent 活得更久，因此准入读取已存储的行，而不是活 runtime 或会话日志 fold：`workspace/session-activity` 把该会话的活动宿主任务作为 `schedule` 族报告，每条任务一项、以其已存储 id 与 title 作名称，并把该族前插到 `next()` 的结果之前，使其他族保留各自条目；`workspace/session-stop` 在与工具相同的串行队列的一个槽位里删除这些行，因此停止会排在写入尚未完成的创建之后；它直接删行，因为在队列内重入公开的 `delete` 会自锁。没有活动宿主任务的会话不报告任何内容，也没有可停的提醒。
 
+创建、更新与删除在排队等待和持久化写入期间持有原生 Agent 操作准入。会话迁移在首次副作用之前拒绝这些修改；已有活跃提醒也会独立使迁移处于忙碌状态。
+
 </details>
 
 <a id="further-exploration"></a>

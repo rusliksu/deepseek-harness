@@ -162,6 +162,9 @@ export class SessionHistoryController {
       }
       notify()
     }, { global: true })
+    const disposeRelocated = this.ctx.on('workspace/session-relocated', ({ sessionId }) => {
+      if (sessionId === target) close()
+    })
     const disposeAssistantStream = request.assistantStream !== true
       ? undefined
       : this.ctx.on('agent/assistant-stream', ({ agent, frame }) => {
@@ -235,6 +238,7 @@ export class SessionHistoryController {
       this.closeFollowers.delete(close)
       signal.removeEventListener('abort', onAbort)
       disposeCreated()
+      disposeRelocated()
       disposeEvent()
       disposeAssistantStream?.()
     }

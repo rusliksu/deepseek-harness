@@ -824,6 +824,22 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
 @Remote('create') create(request: SessionCreateRequest): Promise<SessionCreateValue>
 
 /**
+ * Observe relocation support and the exact persisted revision without resuming a chat.
+ * @param request - existing ordinary Session identity.
+ * @param signal - cancellation for the header observation.
+ * @returns support and the current directory/revision when the Session exists.
+ */
+@Remote('relocationInfo') async relocationInfo(request: { readonly sessionId: SessionId }, signal: AbortSignal): Promise<SessionRelocationInfo>
+
+/**
+ * Move one idle chat to an existing registered local project without moving its files.
+ * @param request - destination, exact source observation, and stable operation UUID.
+ * @param signal - caller cancellation before durable work is admitted.
+ * @returns the verified same-ID chat and final persisted revision.
+ */
+@Remote('relocate') async relocate(request: SessionRelocateRequest, signal: AbortSignal): Promise<SessionRelocateValue>
+
+/**
  * Select one Session-local model after explicitly resuming the Session; save the default in the background.
  * @param request - Session identity and requested model selection.
  * @returns the normalized selection installed for the Session, without waiting for default persistence.

@@ -114,6 +114,11 @@ export class TerminalSessionService extends Service {
 
   constructor(ctx: Context) {
     super(ctx, 'terminals')
+    ctx.on('agent/relocation-check', ({ agent }) => {
+      if (this.hasOwnerActivity(agent)) {
+        throw Object.assign(new Error('session has persistent terminal state'), { code: 'session/relocate-unsupported' })
+      }
+    })
     ctx.effect(() => () => this.disposeAll(), 'pty teardown')
   }
 
@@ -152,6 +157,7 @@ export class TerminalSessionService extends Service {
    * @returns published identity, metadata, status, and MOTD.
    */
   async spawn(owner: Agent, request: TerminalSpawnRequest, signal?: AbortSignal): Promise<TerminalSpawnResult> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: owner.id, agent: owner })
     this.assertActive()
     signal?.throwIfAborted()
     this.ensureOwnerCleanup(owner)

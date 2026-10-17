@@ -101,6 +101,8 @@ This section explains the design decisions behind the registry and points at the
 
 Owner disposal (`disposeOwned`) cancels the owner's jobs, awaits their settlement, removes their records, and announces each removal — the one visible-set change no per-job record carries. Service disposal (`disposeAll`) cancels all live jobs, awaits settlement, removes every record (announcing each removal, so a subscriber mounted outside the service drops its rows), then detaches the cross-fiber owner-cleanup effects.
 
+An owned producer acquires `agent/admit-operation` before counters, producer startup, or registration change. A relocation reservation refuses the start before its callback runs; successful registration releases admission while the registered job remains visible to activity checks.
+
 </details>
 
 -----

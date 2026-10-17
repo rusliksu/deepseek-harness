@@ -80,6 +80,11 @@ export class FileUploads extends TypertRemoteService {
     )
     ctx.on('session/event', (session, event) => { this.observeSessionEvent(session, event) })
     ctx.on('session/disposed', (session) => { this.stagedFiles.delete(session) })
+    ctx.on('agent/relocation-check', ({ agent }) => {
+      if ((this.stagedFiles.get(agent.session)?.size ?? 0) > 0) {
+        throw Object.assign(new Error('session has staged file uploads'), { code: 'session/relocate-unsupported' })
+      }
+    })
   }
 
   /**
@@ -122,8 +127,9 @@ export class FileUploads extends TypertRemoteService {
     readonly signal?: AbortSignal
     readonly name?: string
   }): Promise<FileUploadValue> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     const agent = await this.resolveAgent(request.sessionId)
-    return this.commit(agent, async () => this.ctx.attachments.saveFileStream({
+    return await this.commit(agent, async () => this.ctx.attachments.saveFileStream({
       data: request.data,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       ...(request.name === undefined ? {} : { name: request.name }),
@@ -181,6 +187,7 @@ export class FileUploads extends TypertRemoteService {
   }
 
   private async commit(agent: Agent, save: () => Promise<FileAttachmentRef>): Promise<FileUploadValue> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: agent.id, agent })
     this.assertOrdinaryAgent(agent)
     let file: FileAttachmentRef
     try {

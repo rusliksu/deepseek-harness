@@ -44,8 +44,9 @@ export interface SessionRelocationTransaction {
   openWriter(): Promise<SessionHandle>
   /** Transfer permanent ownership to the verified replacement handle.
    * @param writer - the exact borrowed handle returned by openWriter.
+   * @param commitRelated - commit related durable records after the final flush, before lease transfer.
    */
-  complete(writer: SessionHandle): Promise<void>
+  complete(writer: SessionHandle, commitRelated?: () => Promise<void>): Promise<void>
   /** Close borrowed writers and release retained ownership unless complete transferred it. */
   close(): Promise<void>
 }

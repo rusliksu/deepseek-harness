@@ -8,6 +8,7 @@
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { WorkspaceId } from './types.ts'
 
@@ -42,6 +43,25 @@ const workspacePendingMutation = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('delete'), workspaceId }),
 ])
 
+const relocationRequest = z.object({
+  sessionId, operationId: z.uuid(), expectedCwd: z.string(),
+  expectedRevision: z.string().transform(SessionPersistenceRevision), targetWorkspaceId: workspaceId,
+})
+
+const relocationResult = z.object({
+  sessionId, operationId: z.uuid(), sourceCwd: z.string(), cwd: z.string(),
+  revision: z.string().transform(SessionPersistenceRevision),
+})
+
+const workspaceRelocation = z.object({
+  request: relocationRequest,
+  sourceWorkspaceId: workspaceId,
+  source: workspaceRecord,
+  target: workspaceRecord,
+  status: z.enum(['prepared', 'completed', 'recovered']),
+  result: relocationResult.optional(),
+})
+
 /**
  * Durable registry state. `initialized` distinguishes a valid empty registry
  * from one that still needs the header-only history bootstrap;
@@ -62,6 +82,8 @@ export const workspaceDomainState = z.object({
   archivedSessionIds: z.array(sessionId).default([]),
   pinnedSessionIds: z.array(sessionId).default([]),
   pendingMutation: workspacePendingMutation.optional(),
+  /** Exact retry outcomes and unfinished cross-owner recovery intents. */
+  relocations: z.record(z.string(), workspaceRelocation).default({}),
 })
 
 /** Durable registry state inferred from {@link workspaceDomainState}. */
@@ -78,7 +100,7 @@ export const workspaceDomainSpec = defineDomain({
   version: 2,
   global: {
     schema: workspaceDomainState,
-    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [] },
+    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [], relocations: {} },
   },
   tables: { workspaces: domainTable<WorkspaceId, WorkspaceRecord>(workspaceRecord) },
 })

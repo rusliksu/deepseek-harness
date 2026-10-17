@@ -122,6 +122,24 @@ function promptRequest(content: Parameters<SessionCommandController['prompt']>[0
 }
 
 describe('Session file uploads', () => {
+  it('refuses relocation while a draft holds a staged receipt, preserving that receipt', async () => {
+    const test = await uploadHarness()
+    const staged = await test.uploads.upload(test.agent, { data: 'eA==' }, new AbortController().signal)
+    await expect(test.ctx.serial('agent/relocation-check', { agent: test.agent }))
+      .rejects.toMatchObject({ code: 'session/relocate-unsupported' })
+    expect(test.uploads.resolve(test.agent, staged.receiptId)).toEqual(staged.file)
+    await test.ctx.fiber.dispose()
+  })
+
+  it('rejects a new upload before storage when relocation owns admission', async () => {
+    const test = await uploadHarness()
+    test.ctx.on('agent/admit-operation', () => { throw new Error('relocation owns this session') })
+    await expect(test.uploads.upload(test.agent, { data: 'eA==' }, new AbortController().signal))
+      .rejects.toThrow('relocation owns this session')
+    expect(test.saveFile).not.toHaveBeenCalled()
+    await test.ctx.fiber.dispose()
+  })
+
   it('registers an HTTP route bound to the upload service', async () => {
     const { uploadRoute } = await uploadHarness()
     await expect(uploadRoute(new Request('http://host/upload')))

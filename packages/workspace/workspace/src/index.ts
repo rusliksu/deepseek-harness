@@ -10,11 +10,16 @@ import { mkdir, stat } from 'node:fs/promises'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import type {
+  SessionPersistenceRevision, SessionRelocationRequest, SessionRelocationResult,
+} from '@deepseek-ai/dsh-session-persistence'
 import type { DomainGlobal, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { WorkspaceEntity } from './entity.ts'
 import type { WorkspaceEntityHost } from './entity.ts'
 
-export { WorkspaceMoveInvalidError } from './entity.ts'
+export { WorkspaceMoveInvalidError } from './errors.ts'
+export { WorkspaceUnknownSessionError, WorkspaceActiveSessionError, WorkspaceArchivedSessionPinError, WorkspaceOrderInvalidError } from './errors.ts'
+import { WorkspaceUnknownSessionError, WorkspaceActiveSessionError, WorkspaceArchivedSessionPinError, WorkspaceOrderInvalidError } from './errors.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath, realpathNormalize } from './paths.ts'
 import { workspaceDomainSpec } from './spec.ts'
 import type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
@@ -39,61 +44,6 @@ export function WorkspaceId(id: string): WorkspaceId {
   return id as WorkspaceId
 }
 
-/**
- * An archiveSession or pinSession request named a session neither live nor in
- * session persistence — a definite miss only; storage faults propagate as
- * themselves.
- */
-export class WorkspaceUnknownSessionError extends Error {
-  /**
-   * @param sessionId - The unknown session id.
-   * @param verb - The registry operation that named the session.
-   */
-  constructor(readonly sessionId: SessionId, verb: 'archive' | 'pin') {
-    super(`cannot ${verb} session '${sessionId}': live sessions and session persistence hold no such session`)
-    this.name = 'WorkspaceUnknownSessionError'
-  }
-}
-
-/**
- * An archiveSession request named a session that at least one
- * `workspace/session-activity` listener reported active. Nothing was written;
- * `activity` names what must stop before the session can be archived.
- */
-export class WorkspaceActiveSessionError extends Error {
-  /**
-   * @param sessionId - The active session id.
-   * @param activity - The reported activity, in listener order.
-   */
-  constructor(readonly sessionId: SessionId, readonly activity: readonly SessionActivity[]) {
-    super(`cannot archive session '${sessionId}': the session is active (${activity.map(entry => entry.kind).join(', ')})`)
-    this.name = 'WorkspaceActiveSessionError'
-  }
-}
-
-/** A pinSession request named a session currently in the archive set; pinning and archival are mutually exclusive. */
-export class WorkspaceArchivedSessionPinError extends Error {
-  /**
-   * @param sessionId - The archived session id.
-   */
-  constructor(readonly sessionId: SessionId) {
-    super(`cannot pin session '${sessionId}': the session is archived`)
-    this.name = 'WorkspaceArchivedSessionPinError'
-  }
-}
-
-/** A workspace reorder named a source or anchor absent from the durable registry order. */
-export class WorkspaceOrderInvalidError extends Error {
-  /**
-   * @param workspaceId - Missing source or anchor id.
-   */
-  constructor(readonly workspaceId: WorkspaceId) {
-    super(`cannot reorder unknown workspace '${workspaceId}'`)
-    this.name = 'WorkspaceOrderInvalidError'
-  }
-}
-
-
 /** The session an archive request is about to write into the archive set. */
 export interface SessionActivityRequest {
   readonly sessionId: SessionId
@@ -110,12 +60,51 @@ export interface ArchiveSessionOptions {
   readonly stopActivity?: boolean
 }
 
+/** One exact directory observation and its registered destination. */
+export interface WorkspaceSessionRelocationRequest {
+  readonly sessionId: SessionId
+  readonly operationId: string
+  readonly expectedCwd: string
+  readonly expectedRevision: SessionPersistenceRevision
+  readonly targetWorkspaceId: WorkspaceId
+}
+
+/** Final verified operation outcome including both workspace identities. */
+export interface WorkspaceSessionRelocationResult extends SessionRelocationResult {
+  readonly sourceWorkspaceId: WorkspaceId
+  readonly targetWorkspaceId: WorkspaceId
+}
+
+/** Related data callbacks consumed by the native agent lifecycle operation. */
+export interface WorkspaceRelocationCallbacks {
+  /** Validate the target and persist the original related records. */
+  prepare(): Promise<void>
+  /** Reconcile both memberships without publishing intermediate writes.
+   * @param header - effective destination header under the retained writer lease.
+   */
+  placed(header: SessionHeader): Promise<void>
+  /** Save the terminal operation result after verification and flush.
+   * @param result - final observation including the reconstructed Session suffix.
+   */
+  completed(result: SessionRelocationResult): Promise<void>
+  /** Restore original related records under the retained lease.
+   * @param header - restored header when supplied by the lifecycle owner.
+   */
+  rollback(header: SessionHeader | undefined): Promise<void>
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     workspaceRegistry: WorkspaceRegistry
   }
 
   interface Events {
+    /**
+     * Publish a complete workspace view after relocation settlement.
+     * @param request - identity whose membership and effective header settled.
+     * @mode emit
+     */
+    'workspace/session-relocated'(request: { sessionId: SessionId }): void
     /**
      * Ask the composed providers what still runs for a session before it is
      * archived. A listener prepends its own {@link SessionActivity} entries to
@@ -180,6 +169,7 @@ export class WorkspaceRegistry extends Service {
   private operationTail: Promise<void> = Promise.resolve()
 
   private readonly host: WorkspaceEntityHost = {
+    enqueue: operation => this.enqueueOperation(operation),
     table: () => this.requireTable(),
     sessionPath: id => this.sessionPaths.get(id),
     readSessionHeader: id => this.readSessionHeader(id),
@@ -202,6 +192,7 @@ export class WorkspaceRegistry extends Service {
     this.state = domain.global.get()
 
     await this.recoverPendingMutation()
+    await this.recoverRelocations()
     this.validateStoredState(this.state)
     if (!this.state.initialized) {
       const headers = await this.listStoredHeaders()
@@ -279,6 +270,150 @@ export class WorkspaceRegistry extends Service {
    */
   get(id: WorkspaceId): Workspace | undefined {
     return this.entities.get(id)
+  }
+
+  /** Whether partial relocation writes must remain hidden from observers. */
+  get relocationPending(): boolean {
+    return Object.values(this.requireState().relocations).some(operation => operation.status === 'prepared')
+  }
+
+  /**
+   * Test whether an identity must remain unavailable until global recovery.
+   * @param sessionId - identity about to accept ordinary work.
+   * @returns whether its durable relocation has no terminal outcome.
+   */
+  hasPendingRelocation(sessionId: SessionId): boolean {
+    return Object.values(this.requireState().relocations).some(operation =>
+      operation.status === 'prepared' && operation.request.sessionId === sessionId)
+  }
+
+  /**
+   * Serialize workspace membership with the native lifecycle and durable recovery intent.
+   * @param request - observed source and registered target identity.
+   * @param apply - native lifecycle owner retaining admission and the physical write lease.
+   * @returns the durable, idempotent result after every owner has verified its state.
+   */
+  relocateSession(
+    request: WorkspaceSessionRelocationRequest,
+    apply: (request: SessionRelocationRequest, callbacks: WorkspaceRelocationCallbacks) => Promise<SessionRelocationResult>,
+  ): Promise<WorkspaceSessionRelocationResult> {
+    const captured = Object.freeze({ ...request })
+    return this.enqueueOperation(async () => {
+      const fail = (code: string): Error => Object.assign(new Error(`session relocation ${code}`), {
+        code: `session/relocate-${code}`,
+      })
+      const previous = this.requireState().relocations[captured.operationId]
+      if (previous !== undefined) {
+        const observed = previous.request
+        if (observed.sessionId !== captured.sessionId || observed.expectedCwd !== captured.expectedCwd
+          || observed.expectedRevision !== captured.expectedRevision || observed.targetWorkspaceId !== captured.targetWorkspaceId) {
+          throw fail('conflict')
+        }
+        if (previous.status === 'recovered') throw fail('conflict')
+        if (previous.status !== 'completed' || previous.result === undefined) throw fail('recovery-required')
+        return { ...previous.result, sourceWorkspaceId: previous.sourceWorkspaceId, targetWorkspaceId: captured.targetWorkspaceId }
+      }
+      if (this.relocationPending) throw fail('recovery-required')
+      const target = this.requireTable().get(captured.targetWorkspaceId)
+      const sourceEntry = [...this.requireTable().entries()].find(([, record]) => record.path === captured.expectedCwd)
+      if (target === undefined || sourceEntry === undefined) throw fail('target-invalid')
+      const [sourceWorkspaceId, source] = sourceEntry
+      if (!source.sessionIds.includes(captured.sessionId)) throw fail('conflict')
+      const storageRequest: SessionRelocationRequest = { sessionId: captured.sessionId, operationId: captured.operationId,
+        expectedCwd: captured.expectedCwd, expectedRevision: captured.expectedRevision, targetCwd: target.path }
+      const originalHeader = await this.readSessionHeader(captured.sessionId)
+      const journal = { request: captured, sourceWorkspaceId, source, target, status: 'prepared' as const }
+      const publish = (): void => {
+        for (const id of [sourceWorkspaceId, captured.targetWorkspaceId]) {
+          const record = this.requireTable().get(id)
+          if (record !== undefined) this.entities.get(id)?.refresh(record)
+        }
+        try { this.ctx.emit('workspace/session-relocated', { sessionId: captured.sessionId }) }
+        catch (error: unknown) { this.ctx.logger.warn(`workspace relocation observer failed: ${String(error)}`) }
+      }
+      const result = await apply(storageRequest, {
+        prepare: async () => {
+          try {
+            if (await realpathNormalize(target.path) !== target.path || !(await stat(target.path)).isDirectory()) throw fail('target-invalid')
+          } catch (error: unknown) {
+            throw Object.assign(fail('target-invalid'), { cause: error })
+          }
+          if (originalHeader.cwd !== captured.expectedCwd || originalHeader.origin === 'subagent') throw fail('unsupported')
+          const state = this.requireState()
+          await this.setState({ ...state, relocations: { ...state.relocations, [captured.operationId]: journal } })
+        },
+        placed: async (header) => {
+          if (header.id !== captured.sessionId || header.cwd !== target.path) throw fail('recovery-required')
+          if (sourceWorkspaceId !== captured.targetWorkspaceId) {
+            const now = new Date().toISOString()
+            await this.requireTable().put(sourceWorkspaceId, {
+              ...source, sessionIds: source.sessionIds.filter(id => id !== captured.sessionId), updatedAt: now,
+            })
+            await this.requireTable().put(captured.targetWorkspaceId, {
+              ...target, sessionIds: [captured.sessionId, ...target.sessionIds.filter(id => id !== captured.sessionId)], updatedAt: now,
+            })
+          }
+          this.headers.set(header.id, header)
+          this.sessionPaths.set(header.id, target.path)
+          this.invalidSessionPaths.delete(header.id)
+          for (const id of [sourceWorkspaceId, captured.targetWorkspaceId]) {
+            const record = this.requireTable().get(id)
+            if (record !== undefined) this.entities.get(id)?.refresh(record)
+          }
+        },
+        completed: async (outcome) => {
+          const state = this.requireState()
+          await this.setState({ ...state, relocations: { ...state.relocations,
+            [captured.operationId]: { ...journal, status: 'completed', result: outcome } } })
+          publish()
+        },
+        rollback: async () => {
+          await this.requireTable().put(sourceWorkspaceId, source)
+          if (sourceWorkspaceId !== captured.targetWorkspaceId) await this.requireTable().put(captured.targetWorkspaceId, target)
+          this.headers.set(captured.sessionId, originalHeader)
+          this.sessionPaths.set(captured.sessionId, source.path)
+          const state = this.requireState()
+          await this.setState({ ...state, relocations: { ...state.relocations,
+            [captured.operationId]: { ...journal, status: 'recovered' } } })
+          publish()
+        },
+      })
+      return { ...result, sourceWorkspaceId, targetWorkspaceId: captured.targetWorkspaceId }
+    })
+  }
+
+  /** Roll unfinished global operations back before publishing the registry or opening agents. */
+  private async recoverRelocations(): Promise<void> {
+    for (const [operationId, operation] of Object.entries(this.requireState().relocations)) {
+      if (operation.status !== 'prepared') continue
+      const { request, source, target, sourceWorkspaceId } = operation
+      const snapshot = await this.ctx.sessionPersistence.stat(request.sessionId)
+      if (snapshot === undefined) throw new Error('session relocation recovery requires its original log')
+      let close: (() => Promise<void>) | undefined
+      try {
+        if (snapshot.header.cwd === target.path && target.path !== source.path) {
+          const transaction = await this.ctx.sessionPersistence.beginRelocation({
+            sessionId: request.sessionId, operationId, expectedCwd: request.expectedCwd,
+            expectedRevision: request.expectedRevision, targetCwd: target.path,
+          })
+          close = () => transaction.close()
+          await transaction.rollback()
+        } else if (snapshot.header.cwd !== source.path) {
+          throw new Error('session relocation recovery found an unrelated directory')
+        } else {
+          const writer = await this.ctx.sessionPersistence.open(request.sessionId, 'write')
+          close = () => writer.close()
+          if (writer.header.cwd !== source.path) throw new Error('session relocation recovery directory changed')
+        }
+        await this.requireTable().put(sourceWorkspaceId, source)
+        if (sourceWorkspaceId !== request.targetWorkspaceId) await this.requireTable().put(request.targetWorkspaceId, target)
+        const state = this.requireState()
+        await this.setState({ ...state, relocations: { ...state.relocations,
+          [operationId]: { ...operation, status: 'recovered' } } })
+      } finally {
+        await close?.()
+      }
+    }
   }
 
   /**
@@ -729,6 +864,7 @@ export class WorkspaceRegistry extends Service {
         workspaceIds,
         archivedSessionIds: state.archivedSessionIds,
         pinnedSessionIds: state.pinnedSessionIds,
+        relocations: state.relocations,
       })
     }
     await this.setState({
@@ -736,6 +872,7 @@ export class WorkspaceRegistry extends Service {
       workspaceIds,
       archivedSessionIds: state.archivedSessionIds,
       pinnedSessionIds: state.pinnedSessionIds,
+      relocations: state.relocations,
     })
   }
 
@@ -885,6 +1022,9 @@ export class WorkspaceRegistry extends Service {
 
   private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.operationTail.then(async () => {
+      if (this.relocationPending) {
+        throw Object.assign(new Error('workspace relocation recovery required'), { code: 'session/relocate-recovery-required' })
+      }
       // A committed delete may leave only its marker cleanup pending. Retry
       // recovery before another create/delete can overwrite that pending operation record.
       await this.recoverPendingMutation()

@@ -515,6 +515,21 @@ initializeDefault(resolveDirectory: () => Promise<string>): Promise<Workspace | 
 get(id: WorkspaceId): Workspace | undefined
 
 /**
+ * Test whether an identity must remain unavailable until global recovery.
+ * @param sessionId - identity about to accept ordinary work.
+ * @returns whether its durable relocation has no terminal outcome.
+ */
+hasPendingRelocation(sessionId: SessionId): boolean
+
+/**
+ * Serialize workspace membership with the native lifecycle and durable recovery intent.
+ * @param request - observed source and registered target identity.
+ * @param apply - native lifecycle owner retaining admission and the physical write lease.
+ * @returns the durable, idempotent result after every owner has verified its state.
+ */
+relocateSession( request: WorkspaceSessionRelocationRequest, apply: (request: SessionRelocationRequest, callbacks: WorkspaceRelocationCallbacks) => Promise<SessionRelocationResult>, ): Promise<WorkspaceSessionRelocationResult>
+
+/**
  * Synchronous workspace projection in durable registry order. Every
  * entity's `sessionIds` getter is already filtered by the startup/live
  * canonical-cwd header index; this method performs no persistence reads.
@@ -601,7 +616,7 @@ unpinSession(sessionId: SessionId): Promise<void>
 async resolveByPath(path: string): Promise<Workspace | undefined>
 ```
 
-Types: [SessionId](core.zh.md)
+Types: [SessionId](core.zh.md) · [SessionRelocationRequest](persistence.zh.md) · [SessionRelocationResult](persistence.zh.md)
 
 Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
 
@@ -628,6 +643,25 @@ Ask the composed providers what still runs for a session before it is archived. 
  */
 'workspace/session-activity'( request: SessionActivityRequest, next: () => Promise<readonly SessionActivity[]>, ): Promise<readonly SessionActivity[]>
 ```
+
+Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
+
+<a id="workspacesession-relocated--emit"></a>
+
+#### `workspace/session-relocated` — emit
+
+Publish a complete workspace view after relocation settlement.
+
+```ts cordis-catalog
+/**
+ * Publish a complete workspace view after relocation settlement.
+ * @param request - identity whose membership and effective header settled.
+ * @mode emit
+ */
+'workspace/session-relocated'(request: { sessionId: SessionId }): void
+```
+
+Types: [SessionId](core.zh.md)
 
 Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
 

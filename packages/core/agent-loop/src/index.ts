@@ -22,18 +22,24 @@ import type {
   SessionStartSource,
   TurnBoundaryProjection,
 } from '@deepseek-ai/dsh-agent'
+import { agentEvents } from '@deepseek-ai/dsh-agent'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { interruptedTurnClosers, SessionLogOffset, SessionPreparation, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import type { WorkspaceRelocationCallbacks } from '@deepseek-ai/dsh-workspace'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
-import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import type {
+  SessionHandle, SessionPersistence, SessionRelocationRequest, SessionRelocationResult,
+  SessionRelocationTransaction,
+} from '@deepseek-ai/dsh-session-persistence'
 import { ReactLoopAgent } from './agent.ts'
 import { inboxProjectionDefinition } from './inbox.ts'
 import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
+import { RelocationAdmission } from './admission.ts'
 import type {} from './runtime-context.ts'
 
 /** Fiber states that cannot own or serve a new lifecycle. */
@@ -212,6 +218,14 @@ interface PreparedAgent {
   dispose(): Promise<void>
 }
 
+interface AgentLifecycle {
+  readonly ownerCtx: Context
+  readonly agent: ReactLoopAgent
+  readonly writer: SessionHandle | undefined
+  readonly setup: AgentSetup | undefined
+  dispose(): Promise<void>
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     agentLoop: AgentLoop
@@ -348,6 +362,9 @@ export class AgentLoop extends Service implements AgentFactory {
   /** Validated configuration owned by the agent-loop service. */
   readonly config: Config
   private readonly ownership: FactoryOwnership
+  private readonly admission = new RelocationAdmission()
+  private readonly lifecycles = new Map<SessionId, AgentLifecycle>()
+  private readonly recoveryTransactions = new Map<SessionId, SessionRelocationTransaction>()
   /** Plain holder prevents Cordis from re-tracing the factory's dependency context through a caller shadow. */
   private readonly runtime: { ctx: Context }
 
@@ -365,7 +382,20 @@ export class AgentLoop extends Service implements AgentFactory {
     ctx.sessionProjections.register(inboxProjectionDefinition)
     this.ownership = new FactoryOwnership(ctx.fiber)
     this.runtime = { ctx }
-    ctx.effect(() => () => this.ownership.dispose(), 'agentLoop.transactions()')
+    ctx.on('agent/admit-operation', ({ sessionId, agent }) => {
+      if (agent !== undefined && ctx.agents.get(sessionId) !== undefined && ctx.agents.get(sessionId) !== agent) {
+        throw new Error(`agent "${sessionId}" is retired`)
+      }
+      return this.admitOperation(sessionId)
+    })
+    ctx.effect(() => async () => {
+      try {
+        await this.ownership.dispose()
+      } finally {
+        for (const transaction of this.recoveryTransactions.values()) await transaction.close()
+        this.recoveryTransactions.clear()
+      }
+    }, 'agentLoop.transactions()')
     ctx.effect(() => ctx.agents.setFactory(this), 'agentLoop.setFactory()')
     ctx.systemPrompt.variable('provider', context => context.agent?.options.provider)
     ctx.systemPrompt.variable('model', context => context.agent?.options.model)
@@ -401,6 +431,17 @@ export class AgentLoop extends Service implements AgentFactory {
         return fiber.dispose
       }, `agentLoop.resume(${id})`)
     }
+  }
+
+  /** Reject an unresolved durable operation as well as an in-process reservation. */
+  private admitOperation(id: SessionId): Disposable {
+    const admission = this.admission.enter(id)
+    const workspace = this.runtime.ctx.get('workspaceRegistry')
+    if (typeof workspace?.hasPendingRelocation === 'function' && workspace.hasPendingRelocation(id)) {
+      admission[Symbol.dispose]()
+      throw Object.assign(new Error('session relocation recovery required'), { code: 'session/relocate-recovery-required' })
+    }
+    return admission
   }
 
   /** Report a contained declarative-start failure to identity-bound consumers. */
@@ -484,6 +525,7 @@ export class AgentLoop extends Service implements AgentFactory {
     callerSignal?: AbortSignal,
     handle?: SessionHandle,
     parentAgent?: Agent,
+    setup?: AgentSetup,
   ): PreparedAgent {
     assertAgentOptions(options)
     ownerCtx.fiber.assertActive()
@@ -541,7 +583,8 @@ export class AgentLoop extends Service implements AgentFactory {
         if (machine === undefined) await machineReady.promise
         /* v8 ignore next -- setup failure untracks this disposer before resolving without a machine. */
         if (machine !== undefined) {
-          machine.cancel({ kind: 'disposed' })
+          machine.cancel({ kind: 'disposed' }, { keepInbox: machine.quiescent })
+          machine.retire()
           await machine.whenIdle()
           await machine.scope.dispose()
         }
@@ -561,6 +604,7 @@ export class AgentLoop extends Service implements AgentFactory {
         detachAgent?.()
         detachSession?.()
       } finally {
+        if (this.lifecycles.get(id)?.agent === machine) this.lifecycles.delete(id)
         untrack()
         if (!ownerTriggered) await unfollowOwner()
       }
@@ -607,6 +651,7 @@ export class AgentLoop extends Service implements AgentFactory {
       if (machine === undefined) throw new Error(`agent "${id}" lifecycle did not construct its driver`)
       const agent = machine
       assertLive()
+      this.lifecycles.set(id, { ownerCtx, agent, writer: handle, setup, dispose })
 
       return {
         agent,
@@ -650,6 +695,7 @@ export class AgentLoop extends Service implements AgentFactory {
    * @returns the published running agent.
    */
   async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, 'cwd'> = {}): Promise<Agent> {
+    using _admission = this.admitOperation(id)
     using preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(id, { meta }))
     const stored = await this.createStoredSession(preparation.session)
     let prepared: PreparedAgent
@@ -712,6 +758,8 @@ export class AgentLoop extends Service implements AgentFactory {
    * @returns the published handle.
    */
   async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> {
+    using _admission = this.admitOperation(options.sessionId)
+    using _parentAdmission = options.parentAgent === undefined ? undefined : this.admitOperation(options.parentAgent.id)
     const preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(options.sessionId, {
       ...options.seed === undefined ? {} : { seed: options.seed },
       ...options.meta === undefined ? {} : { meta: options.meta },
@@ -747,7 +795,7 @@ export class AgentLoop extends Service implements AgentFactory {
       )
     })()
     this.ownership.trackWrapper(published)
-    return published
+    return await published
   }
 
   /** Prepare one Agent around an acquired Session, run setup, and publish it. */
@@ -766,7 +814,7 @@ export class AgentLoop extends Service implements AgentFactory {
     const session = ownedPreparation.session
     let prepared: PreparedAgent
     try {
-      prepared = this.prepare(ownerCtx, id, agentOptions, session, signal, stored?.handle, parentAgent)
+      prepared = this.prepare(ownerCtx, id, agentOptions, session, signal, stored?.handle, parentAgent, setup)
     } catch (error: unknown) {
       await stored?.handle.close().catch(() => {})
       throw error
@@ -781,7 +829,7 @@ export class AgentLoop extends Service implements AgentFactory {
 
   private async initializeAgent(prepared: PreparedAgent, initialize: () => Promise<AgentHandle>): Promise<AgentHandle> {
     try {
-      return await prepared.agent.runMaintenance(async () => {
+      return await prepared.agent.initialize(async () => {
         try {
           return await initialize()
         } catch (error: unknown) {
@@ -819,6 +867,29 @@ export class AgentLoop extends Service implements AgentFactory {
     options: ResumeAgentOptions,
   ): Promise<AgentHandle> {
     const id = options.resumeSessionId
+    const admission = this.admitOperation(id)
+    let parentAdmission: Disposable | undefined
+    try {
+      parentAdmission = options.parentAgent === undefined ? undefined : this.admitOperation(options.parentAgent.id)
+    } catch (error: unknown) {
+      admission[Symbol.dispose]()
+      throw error
+    }
+    const published = this.resumeFrom(ownerCtx, options, signal => persistence.open(id, 'write', { signal }))
+    this.ownership.trackWrapper(published)
+    return published.finally(() => {
+      parentAdmission?.[Symbol.dispose]()
+      admission[Symbol.dispose]()
+    })
+  }
+
+  /** Reconstruct one incarnation under a caller-owned continuous write lease. */
+  private resumeFrom(
+    ownerCtx: Context,
+    options: ResumeAgentOptions,
+    open: (signal: AbortSignal) => Promise<SessionHandle>,
+  ): Promise<AgentHandle> {
+    const id = options.resumeSessionId
     const published = (async () => {
       // The open and read may outlive their owner: race them against caller
       // cancellation, owner-fiber unload, and factory teardown so a
@@ -840,7 +911,7 @@ export class AgentLoop extends Service implements AgentFactory {
           // Taking write ownership FIRST excludes a concurrent resume of the
           // same id (in this process, a live agent's handle holds the claim).
           handle = await raceAbortCall(
-            () => persistence.open(id, 'write', { signal: fused }),
+            () => open(fused),
             fused,
             id,
             (abandoned) => { void abandoned.close() },
@@ -887,6 +958,133 @@ export class AgentLoop extends Service implements AgentFactory {
     })()
     this.ownership.trackWrapper(published)
     return published
+  }
+
+  /**
+   * Replace an idle owned incarnation while retaining its exact storage lease.
+   * Recovery intent and related records are committed by their native owner.
+   * @param ownerCtx - existing lifecycle owner, or owner for a cold identity.
+   * @param request - exact storage observation and operation identity.
+   * @param options - composition and model route for a cold identity.
+   * @param callbacks - related durable records and final operation outcome.
+   * @returns the committed placement with its revision after replacement flush.
+   */
+  relocate(
+    ownerCtx: Context,
+    request: SessionRelocationRequest,
+    options: Omit<ResumeAgentOptions, 'resumeSessionId' | 'parentAgent'>,
+    callbacks: WorkspaceRelocationCallbacks,
+  ): Promise<SessionRelocationResult> {
+    const operation = this.relocateOwned(ownerCtx, request, options, callbacks)
+    this.ownership.trackWrapper(operation)
+    return operation
+  }
+
+  /** Settle admitted relocation before factory teardown releases recovery leases. */
+  private async relocateOwned(
+    ownerCtx: Context,
+    request: SessionRelocationRequest,
+    options: Omit<ResumeAgentOptions, 'resumeSessionId' | 'parentAgent'>,
+    callbacks: WorkspaceRelocationCallbacks,
+  ): Promise<SessionRelocationResult> {
+    const reservation = this.admission.reserve(request.sessionId)
+    let release = true
+    let transaction: SessionRelocationTransaction | undefined
+    let replacement: AgentHandle | undefined
+    let borrowedWriter: SessionHandle | undefined
+    const settlement: { committed: boolean; result?: SessionRelocationResult } = { committed: false }
+    let intent = false
+    let closed = false
+    const old = this.lifecycles.get(request.sessionId)
+    const fail = (code: string): Error => Object.assign(new Error(`session relocation ${code}`), {
+      code: `session/relocate-${code}`,
+    })
+    try {
+      const live = this.runtime.ctx.agents.get(request.sessionId)
+      if (live !== undefined && old?.agent !== live) throw fail('unsupported')
+      if (old !== undefined && old.ownerCtx.fiber !== ownerCtx.fiber) throw fail('unsupported')
+      if (old !== undefined && !old.agent.quiescent) throw fail('busy')
+      if (old !== undefined && this.runtime.ctx.agents.list().some(child => this.runtime.ctx.agents.isOwnedBy(child.id, old.agent))) {
+        throw fail('busy')
+      }
+      const activity = await this.runtime.ctx.waterfall(
+        'workspace/session-activity', { sessionId: request.sessionId }, () => Promise.resolve([]),
+      )
+      if (activity.length > 0) throw fail('busy')
+      if (old !== undefined) await agentEvents(this.runtime.ctx, old.agent).serial('agent/relocation-check', {})
+      const persistence = this.runtime.ctx.get('sessionPersistence')
+      if (persistence?.supportsRelocation !== true) throw fail('unsupported')
+      await callbacks.prepare()
+      intent = true
+      transaction = await persistence.beginRelocation(request, old?.writer === undefined ? {} : { writer: old.writer })
+      if (request.expectedCwd === request.targetCwd) {
+        const result = {
+          sessionId: request.sessionId, operationId: request.operationId,
+          sourceCwd: request.expectedCwd, cwd: request.targetCwd, revision: request.expectedRevision,
+        }
+        await callbacks.completed(result)
+        return result
+      }
+      if (old !== undefined) {
+        closed = true
+        await old.dispose()
+      }
+      await transaction.commit()
+      const writer = borrowedWriter = await transaction.openWriter()
+      await callbacks.placed(writer.header)
+      const resumeOptions: ResumeAgentOptions = {
+        ...options,
+        resumeSessionId: request.sessionId,
+        ...(old === undefined ? {} : { agentOptions: { ...old.agent.options },
+          ...(old.setup === undefined ? {} : { setup: old.setup }) }),
+      }
+      replacement = await this.resumeFrom(ownerCtx, resumeOptions, () => Promise.resolve(writer))
+      await transaction.complete(writer, async () => {
+        const snapshot = await persistence.stat(request.sessionId)
+        if (snapshot === undefined || snapshot.header.cwd !== request.targetCwd) throw fail('recovery-required')
+        settlement.result = {
+          sessionId: request.sessionId, operationId: request.operationId,
+          sourceCwd: request.expectedCwd, cwd: request.targetCwd, revision: snapshot.revision,
+        }
+        await callbacks.completed(settlement.result)
+        settlement.committed = true
+      })
+      if (settlement.result === undefined) throw fail('unsupported')
+      return settlement.result
+    } catch (error: unknown) {
+      if (settlement.committed) {
+        release = false
+        await replacement?.dispose().catch(() => {})
+        throw fail('recovery-required')
+      }
+      if (!intent) throw error
+      try {
+        await replacement?.dispose()
+        await borrowedWriter?.close()
+        await transaction?.rollback()
+        await callbacks.rollback(undefined)
+        if (closed && old !== undefined && transaction !== undefined
+          && this.ownership.isActive() && !INACTIVE_STATES.has(old.ownerCtx.fiber.state)) {
+          const writer = await transaction.openWriter()
+          await this.resumeFrom(old.ownerCtx, {
+            resumeSessionId: request.sessionId, agentOptions: { ...old.agent.options },
+            ...(old.setup === undefined ? {} : { setup: old.setup }),
+          }, () => Promise.resolve(writer))
+          await transaction.complete(writer)
+        }
+      } catch (rollbackError: unknown) {
+        release = false
+        throw Object.assign(new AggregateError([error, rollbackError], 'session relocation recovery required'), {
+          code: 'session/relocate-recovery-required',
+        })
+      }
+      throw error
+    } finally {
+      if (!release && !settlement.committed && transaction !== undefined) {
+        this.recoveryTransactions.set(request.sessionId, transaction)
+      } else await transaction?.close()
+      if (release) reservation[Symbol.dispose]()
+    }
   }
 }
 

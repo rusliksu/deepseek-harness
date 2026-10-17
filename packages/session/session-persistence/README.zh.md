@@ -55,6 +55,8 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 
 向 `beginRelocation` 传入 `{ writer }`，可在代理完成清理期间保留该句柄的内核租约。关闭旧句柄后，使用 `openWriter()` 为已提交或已恢复的目录取得句柄，并在验证后调用 `complete(writer)` 转交永久所有权。在完成前，关闭借用句柄会将所有权归还给事务以便回滚。若尚未开始清理，关闭已放弃的准备事务仍会保留原始句柄可用；已退役 Session 的事件不能到达替代写入句柄。
 
+可选的 `complete(writer, commitRelated)` 回调在写入方最终排空与刷写之后、内核租约转交之前提交关联持久记录。回调失败会保留事务所有权，调用方可关闭借用句柄后回滚。崩溃后重新打开的已提交操作仅在仍拥有当前放置修订号时，才能恢复其原始放置位置。
+
 ### 所有权与可见性
 
 `create` 与 `open(id, 'write')` 取得进程内单写者所有权：在持有者活跃期间第二次以写模式打开会以 `SessionAlreadyOwnedError` 拒绝，对已占用 id 执行 `create` 会以 `SessionAlreadyExistsError` 拒绝，在 `read` 句柄上执行修改会以 `SessionReadOnlyError` 拒绝——一种句柄类型，运行时拒绝。对已关闭句柄的任何操作会以 `SessionHandleClosedError` 拒绝，`SessionOwnershipLostError` 标记写所有权已永久丢失的写句柄（关闭并重新打开）。已创建的会话自 `create` 完成之刻起即可在本进程内被观察到，而后端可以把物理实体化推迟到第一次 `append` 或 `flush`；其他进程只能看到已实体化的会话，一个在崩溃前从未实体化的会话等于从未存在。

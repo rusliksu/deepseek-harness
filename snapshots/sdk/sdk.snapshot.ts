@@ -393,9 +393,14 @@ function normalizeNotifications(notifications: readonly HarnessNotification[], c
 
 /** Normalize the owned-run projection. */
 function normalizeResult(result: RunResult, ctx: NormalizeContext): string {
+  const ending = result.events.findLast(event => event.type === 'turn/end')
+  const status = result.notifications.findLast(notification => notification.method === 'session.status'
+    && notification.params.sessionId === result.sessionId)
   return normalizeStdout(`${JSON.stringify({
     sessionId: result.sessionId,
     finalResponse: result.finalResponse,
+    reason: ending?.data.reason,
+    status: status?.params.status,
   })}\n`, ctx)
 }
 

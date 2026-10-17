@@ -127,6 +127,8 @@ A create or delete whose second write fails rolls the cache and the prior order 
 
 The `workspace-invariant` companion registers the owned relationship: every durable `domain/changed` for the `workspaces` table must name a record the entity cache already holds — a delete is valid only after the registry removed the entity from its cache, so a bypassing write path fails the invariant.
 
+`relocateSession` serializes the native lifecycle operation with every registry and entity mutation. It stores the original source and target records before placement changes, removes the source membership before adding the target, preserves archive and pin sets, and records success only after verification and flush. Unfinished operations are rolled back under exclusive Session ownership before startup publishes the registry. Pending recovery blocks further Workspace mutations and ordinary work for that Session; completed operation UUIDs retain exact retry results. Older domain records default the new relocation history to an empty object.
+
 </details>
 
 -----

@@ -128,6 +128,8 @@ Final adapter selection, dispatch, and iteration failures arrive as terminal fin
 
 Before closing a failed step, the driver records an error result for each unanswered assistant tool call. A recorded `tool/call` without a committed result receives `TOOL_OUTCOME_UNKNOWN`; a request without a call record receives `TOOL_NOT_STARTED`. Committed results remain intact, started dispatches settle before recovery, and the turn retains the original failure. These results let later requests use paired tool history without automatically retrying uncertain operations ([decision](../../../.agents/notes/implemented/bug-fix/2026-09-19-failed-step-tool-results.md)).
 
+Relocation reserves the exact Session identity before any asynchronous work. Ordinary factory calls, inbox mutations, maintenance, and admitted API or background operations cannot enter while that reservation is held. Replacing an idle owned incarnation retains its kernel write lease through teardown, related-record reconciliation, reconstruction, and the final flush. A failed rollback retains ownership until shutdown; startup recovery precedes configured agent activation in the Web composition. Retired incarnations reject new input permanently.
+
 </details>
 
 -----

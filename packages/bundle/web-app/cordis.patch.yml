@@ -11,6 +11,10 @@
 # provides bind-dependent `webRuntime` values to the trust fence.
 # `dsh --profile web --help` provides neither service, so no server binds.
 
+# Workspace recovery completes before a configured chat can acquire its writer.
+- id: agent-loop
+  inject: [workspaceRegistry]
+
 # ── surface-specific values the base deliberately omits ─────────────────────
 
 - id: system-prompt

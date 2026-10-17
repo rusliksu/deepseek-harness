@@ -70,12 +70,14 @@ export const inboxProjectionDefinition = {
  * @param projections - registry with the standard Inbox projection registered by AgentLoop.
  * @param session - session whose durable events store pending input.
  * @param dispatch - agent-scoped notifications for Inbox lifecycle events.
+ * @param admit - exact-incarnation operation admission before every mutation.
  */
 export class ReactLoopInbox implements InboxContract {
   constructor(
     private readonly projections: SessionProjectionRegistry,
     private readonly session: Session,
     private readonly dispatch: AgentEventDispatch,
+    private readonly admit?: () => Disposable | undefined,
   ) {}
 
   /** Prompts awaiting individual turns. */
@@ -202,6 +204,7 @@ export class ReactLoopInbox implements InboxContract {
     inserted: UserMessage[],
     discardRemoved: boolean,
   ): UserMessage[] {
+    using _admission = this.admit?.()
     const state = this.current()
     const inbox = state[target]
     const truncatedStart = Math.trunc(start)

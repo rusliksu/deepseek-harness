@@ -82,6 +82,8 @@ kind: "package-reference"
 
 子 agent 获得全新的扁平注册作用域：父级工具限制与权限绝不会被导入，工具所施加的过滤属于组合而非父级派生授权。后端声明包括 `agentOptions` 在内的全部五项启动时能力，因为它控制子 agent 的创建窗口，可以逐一强制执行。
 
+Spawn 在子 agent 启动期间持有父 Agent 的操作准入。为迁移预留的父 agent 无法启动新的进程内子 agent；仍驻留且有归属的子 agent 也会阻止替换父实例。
+
 </details>
 
 -----
