@@ -25,7 +25,7 @@
       disabled: !!js process.env.DSH_SNAPSHOT !== 'record'
 
     - id: subagent-dsh-sdk
-      name: '@deepseek-ai/dsh-subagent-dsh-sdk'
+      name: '../../../packages/subagent/subagent-dsh-sdk/src/index.ts'
       config:
         profile: sdk
         patches: !!js JSON.parse(process.env.DSH_TEST_CHILD_PATCHES ?? '[]')

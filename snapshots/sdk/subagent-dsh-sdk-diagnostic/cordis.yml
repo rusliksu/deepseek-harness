@@ -24,7 +24,7 @@
 
 - insert:
     - id: subagent-dsh-sdk-diagnostic
-      name: '@deepseek-ai/dsh-subagent-dsh-sdk'
+      name: '../../../packages/subagent/subagent-dsh-sdk/src/index.ts'
       config:
         providerName: dsh-sdk-diagnostic
         profile: sdk
@@ -44,7 +44,7 @@
         backgroundMode: one-shot
         maxDepth: provider-managed
     - id: subagent-dsh-sdk-diagnostic-background
-      name: '@deepseek-ai/dsh-subagent-dsh-sdk'
+      name: '../../../packages/subagent/subagent-dsh-sdk/src/index.ts'
       config:
         providerName: dsh-sdk-diagnostic-background
         profile: sdk
