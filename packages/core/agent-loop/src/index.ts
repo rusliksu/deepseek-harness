@@ -823,6 +823,11 @@ export class AgentLoop extends Service implements AgentFactory {
       const setupCommit = await raceAbort(setup?.(prepared.agent.ctx, prepared.agent), prepared.signal, id)
       setupCommit?.commit()
       await this.appendUnstoredSuffix(stored, session)
+      const workspace = this.runtime.ctx.get('workspaceRegistry')
+      if (typeof workspace?.sessionDirectoryContexts === 'function') {
+        await workspace.sessionDirectoryContexts({ header: session.header,
+          inheritedEventCount: session.inheritedEventCount, eventCount: session.seq })
+      }
       return await prepared.publish(source)
     })
   }
@@ -1014,7 +1019,17 @@ export class AgentLoop extends Service implements AgentFactory {
       if (old !== undefined) await agentEvents(this.runtime.ctx, old.agent).serial('agent/relocation-check', {})
       const persistence = this.runtime.ctx.get('sessionPersistence')
       if (persistence?.supportsRelocation !== true) throw fail('unsupported')
-      await callbacks.prepare()
+      if (old !== undefined) {
+        await callbacks.prepare({ header: old.agent.session.header,
+          inheritedEventCount: old.agent.session.inheritedEventCount, eventCount: old.agent.session.seq })
+      } else {
+        const reader = await persistence.open(request.sessionId, 'read')
+        try {
+          const events = (await reader.read()).events
+          await callbacks.prepare({ header: reader.header, inheritedEventCount: reader.inheritedEventCount,
+            eventCount: SessionLogOffset(events.length) })
+        } finally { await reader.close() }
+      }
       intent = true
       transaction = await persistence.beginRelocation(request, old?.writer === undefined ? {} : { writer: old.writer })
       if (request.expectedCwd === request.targetCwd) {

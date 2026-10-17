@@ -97,6 +97,7 @@ export class Session implements SessionFace {
   // ---- Window and derived state (all private; the snapshot is the only read API) ----
   private baseSeq = SessionLogOffset(0)
   private hasMore = false
+  private directoryContexts: SessionSnapshot['directoryContexts']
   private openState: OpenState = 'cold'
   private openError: RemoteFailure | null = null
   private openPromise: Promise<void> | null = null
@@ -651,6 +652,7 @@ export class Session implements SessionFace {
           change.hasMore,
           change.page.projections === undefined ? undefined : projectionsBaseline(change.page.projections),
           change.page.assistantStream,
+          change.page.directoryContexts,
         )
         return
       case 'prepend':
@@ -670,6 +672,7 @@ export class Session implements SessionFace {
     hasMore: boolean,
     projections?: ProjectionsBaseline,
     assistantStream?: SessionAssistantStreamBaseline,
+    directoryContexts?: SessionSnapshot['directoryContexts'],
   ): void {
     // A durable gap-repair page has no assistant baseline. Clearing transient
     // attempts makes a held notification reopen follow once for an atomic
@@ -677,6 +680,7 @@ export class Session implements SessionFace {
     const visible = this.assistantStream.replace(entries, assistantStream)
     this.baseSeq = SessionLogOffset(entries[0]?.event.seq ?? 0)
     this.hasMore = hasMore
+    if (directoryContexts !== undefined) this.directoryContexts = directoryContexts
     if (this.pendingHistory !== null) {
       this.pendingHistory.beforeSeq = this.baseSeq
       this.pendingHistory.hasMore = hasMore
@@ -889,6 +893,7 @@ export class Session implements SessionFace {
     const identity = this.projections.values().subagent
     return {
       sessionId: this.sessionId,
+      ...this.directoryContexts === undefined ? {} : { directoryContexts: this.directoryContexts },
       pendingSubmissions: this.pendingSubmissions,
       running: this.running,
       subagent: this.address === undefined

@@ -770,6 +770,10 @@ interface TurnEndReasonMap {
 
 可选的 `application` 指定文件关联应用，不修改系统默认值；`workspacePathApplications({ path })` 在校验 Host 路径后返回当前关联应用、名称、图标和默认项。
 
+## 历史目录元数据
+
+`SessionPage` 与初始 `SessionFollowFrame` 可携带 `directoryContexts`。Client 将这些区间与历史窗口一起发布到 `SessionSnapshot`；迁移后，流重新打开并接收替换基线。区间使用 [Workspace 事件目录](workspace.zh.md#history-directory-contexts)，不修改 Session 事件。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>

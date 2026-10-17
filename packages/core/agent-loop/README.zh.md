@@ -228,4 +228,6 @@ const handle = await ctx.agents.create({
 
 无。
 
+生命周期在发布前通过 Workspace 记录事件目录区间，并向迁移操作提供静止状态下的事件边界。Session 日志保持不变；区间元数据保留相对引用的含义。
+
 </details>

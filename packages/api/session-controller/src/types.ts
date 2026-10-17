@@ -10,7 +10,7 @@ import type { TextBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionId, SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
+import type { SessionDirectoryContext, WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
@@ -127,6 +127,8 @@ export interface SessionRelocationInfo {
   readonly supported: boolean
   readonly cwd?: string
   readonly revision?: string
+  /** Event-directory epochs used to resolve historical relative references. */
+  readonly directoryContexts?: readonly SessionDirectoryContext[]
 }
 
 /** Host fold state for durable model selection. */
@@ -577,6 +579,8 @@ export type SessionAssistantStreamFrame =
 export interface SessionPage {
   readonly records: readonly SessionHistoryRecord[]
   readonly hasMore: boolean
+  /** Independent directory history; absent on hosts without relocation support. */
+  readonly directoryContexts?: readonly SessionDirectoryContext[]
 }
 
 /** Complete opening window followed by ordered durable events and opted-in assistant frames. */
@@ -588,6 +592,7 @@ export type SessionFollowFrame =
     readonly records: readonly SessionHistoryRecord[]
     readonly hasMore: boolean
     readonly projections: SessionProjectionBaseline
+    readonly directoryContexts?: readonly SessionDirectoryContext[]
     readonly assistantStream?: SessionAssistantStreamBaseline
   }
   | SessionEventEntry

@@ -142,32 +142,38 @@ describe('native relocation lifecycle and workspace transaction', () => {
     expect(f.wb.sessionIds).toEqual([])
   })
 
-  it.each(['placed', 'completed'] as const)('rolls back a failed %s callback without releasing writer ownership', async (point) => {
-    const f = await fixture()
-    await expect(f.ctx.workspaceRegistry.relocateSession(f.request, (request, callbacks) =>
-      f.ctx.agentLoop.relocate(f.ctx, request, {}, {
-        ...callbacks,
-        placed: async (header) => {
-          await callbacks.placed(header)
-          if (point === 'placed') {
-            await expect(f.foreign.sessionPersistence.open(f.id, 'write')).rejects.toThrow()
-            throw new Error('injected placed failure')
-          }
-        },
-        completed: async (result) => {
-          if (point === 'completed') {
-            await expect(f.foreign.sessionPersistence.open(f.id, 'write')).rejects.toThrow()
-            throw new Error('injected completed failure')
-          }
-          await callbacks.completed(result)
-        },
-      }))).rejects.toThrow(`injected ${point} failure`)
-    expect(f.ctx.agents.get(f.id)?.session.header.cwd).toBe(f.a)
-    expect(f.wa.sessionIds).toEqual([f.id])
-    expect(f.wb.sessionIds).toEqual([])
-    expect(f.ctx.workspaceRegistry.relocationPending).toBe(false)
-    await expect(f.foreign.sessionPersistence.open(f.id, 'write')).rejects.toThrow()
-  })
+  it.each(['placed', 'completed', 'completed-persisted'] as const)(
+    'rolls back a failed %s callback without releasing writer ownership', async (point) => {
+      const f = await fixture()
+      await expect(f.ctx.workspaceRegistry.relocateSession(f.request, (request, callbacks) =>
+        f.ctx.agentLoop.relocate(f.ctx, request, {}, {
+          ...callbacks,
+          placed: async (header) => {
+            await callbacks.placed(header)
+            if (point === 'placed') {
+              await expect(f.foreign.sessionPersistence.open(f.id, 'write')).rejects.toThrow()
+              throw new Error('injected placed failure')
+            }
+          },
+          completed: async (result) => {
+            if (point === 'completed') {
+              await expect(f.foreign.sessionPersistence.open(f.id, 'write')).rejects.toThrow()
+              throw new Error('injected completed failure')
+            }
+            await callbacks.completed(result)
+            if (point === 'completed-persisted') throw new Error('injected completed-persisted failure')
+          },
+        }))).rejects.toThrow(`injected ${point} failure`)
+      expect(f.ctx.agents.get(f.id)?.session.header.cwd).toBe(f.a)
+      expect(f.wa.sessionIds).toEqual([f.id])
+      expect(f.wb.sessionIds).toEqual([])
+      expect(f.ctx.workspaceRegistry.relocationPending).toBe(false)
+      const restored = f.ctx.agents.get(f.id)!.session
+      expect(await f.ctx.workspaceRegistry.sessionDirectoryContexts({ header: restored.header,
+        inheritedEventCount: restored.inheritedEventCount, eventCount: restored.seq }))
+        .toEqual([{ fromEvent: 0, cwd: f.a }])
+      await expect(f.foreign.sessionPersistence.open(f.id, 'write')).rejects.toThrow()
+    })
 
   it('denies queued input and in-flight API admission before preparing related data', async () => {
     const f = await fixture()

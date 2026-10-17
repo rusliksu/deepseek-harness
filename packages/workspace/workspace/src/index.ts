@@ -22,11 +22,15 @@ export { WorkspaceUnknownSessionError, WorkspaceActiveSessionError, WorkspaceArc
 import { WorkspaceUnknownSessionError, WorkspaceActiveSessionError, WorkspaceArchivedSessionPinError, WorkspaceOrderInvalidError } from './errors.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath, realpathNormalize } from './paths.ts'
 import { workspaceDomainSpec } from './spec.ts'
+import { deriveSessionDirectoryContexts } from './directory-context.ts'
 import type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
-import type { SessionActivity, Workspace, WorkspaceId as WorkspaceIdBrand } from './types.ts'
+import type {
+  SessionActivity, SessionDirectoryContext, SessionDirectoryObservation, Workspace, WorkspaceId as WorkspaceIdBrand,
+} from './types.ts'
 
 export type {
   SessionActivity, SessionActivityItem, SessionActivityKind, SessionActivityKindMap, Workspace,
+  SessionDirectoryContext, SessionDirectoryObservation,
 } from './types.ts'
 export { workspaceDomainState, workspaceRecord, workspaceDomainSpec } from './spec.ts'
 export type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
@@ -77,8 +81,10 @@ export interface WorkspaceSessionRelocationResult extends SessionRelocationResul
 
 /** Related data callbacks consumed by the native agent lifecycle operation. */
 export interface WorkspaceRelocationCallbacks {
-  /** Validate the target and persist the original related records. */
-  prepare(): Promise<void>
+  /** Validate the target and persist the original related records.
+   * @param observation - quiescent source history captured by the lifecycle owner.
+   */
+  prepare(observation: SessionDirectoryObservation): Promise<void>
   /** Reconcile both memberships without publishing intermediate writes.
    * @param header - effective destination header under the retained writer lease.
    */
@@ -288,6 +294,30 @@ export class WorkspaceRegistry extends Service {
   }
 
   /**
+   * Capture a Session's directory history before publishing its lifecycle or showing relative references.
+   * Fork prefixes copy the parent's recorded contexts and remain independent afterwards.
+   * @param observation - current header, inherited cut and event count from the Session owner or reader.
+   * @returns immutable contexts, or undefined when older relocation metadata cannot establish them.
+   */
+  async sessionDirectoryContexts(observation: SessionDirectoryObservation): Promise<readonly SessionDirectoryContext[] | undefined> {
+    const existing = this.requireState().directoryContexts[observation.header.id]
+    // Replacement initialization runs inside relocateSession's registry operation.
+    if (existing !== undefined) {
+      const last = existing.at(-1)
+      if (last === undefined || last.fromEvent > observation.eventCount
+        || (last.cwd !== observation.header.cwd && !this.hasPendingRelocation(observation.header.id))) return undefined
+      return existing.map(context => ({ ...context }))
+    }
+    return await this.enqueueOperation(async () => {
+      const contexts = await deriveSessionDirectoryContexts(observation, this.requireState(), this.ctx.sessionPersistence)
+      if (contexts === undefined) return undefined
+      const state = this.requireState()
+      await this.setState({ ...state, directoryContexts: { ...state.directoryContexts, [observation.header.id]: contexts } })
+      return contexts.map(context => ({ ...context }))
+    })
+  }
+
+  /**
    * Serialize workspace membership with the native lifecycle and durable recovery intent.
    * @param request - observed source and registered target identity.
    * @param apply - native lifecycle owner retaining admission and the physical write lease.
@@ -322,7 +352,10 @@ export class WorkspaceRegistry extends Service {
       const storageRequest: SessionRelocationRequest = { sessionId: captured.sessionId, operationId: captured.operationId,
         expectedCwd: captured.expectedCwd, expectedRevision: captured.expectedRevision, targetCwd: target.path }
       const originalHeader = await this.readSessionHeader(captured.sessionId)
-      const journal = { request: captured, sourceWorkspaceId, source, target, status: 'prepared' as const }
+      const journal: WorkspaceDomainState['relocations'][string] = {
+        request: captured, sourceWorkspaceId, source, target, status: 'prepared',
+      }
+      let originalContexts: SessionDirectoryContext[] | undefined
       const publish = (): void => {
         for (const id of [sourceWorkspaceId, captured.targetWorkspaceId]) {
           const record = this.requireTable().get(id)
@@ -332,15 +365,27 @@ export class WorkspaceRegistry extends Service {
         catch (error: unknown) { this.ctx.logger.warn(`workspace relocation observer failed: ${String(error)}`) }
       }
       const result = await apply(storageRequest, {
-        prepare: async () => {
+        prepare: async (observation) => {
           try {
             if (await realpathNormalize(target.path) !== target.path || !(await stat(target.path)).isDirectory()) throw fail('target-invalid')
           } catch (error: unknown) {
             throw Object.assign(fail('target-invalid'), { cause: error })
           }
           if (originalHeader.cwd !== captured.expectedCwd || originalHeader.origin === 'subagent') throw fail('unsupported')
+          if (observation.header.id !== captured.sessionId || observation.header.cwd !== captured.expectedCwd) throw fail('conflict')
+          const contexts = await deriveSessionDirectoryContexts(observation, this.requireState(), this.ctx.sessionPersistence)
+          if (contexts === undefined) throw fail('unsupported')
+          originalContexts = contexts
+          const last = contexts.at(-1)
+          if (last?.cwd !== captured.expectedCwd || last.fromEvent > observation.eventCount) throw fail('unsupported')
+          journal.directoryContexts = target.path === source.path ? contexts : [
+            ...contexts.filter(context => context.fromEvent < observation.eventCount),
+            { fromEvent: observation.eventCount, cwd: target.path },
+          ]
           const state = this.requireState()
-          await this.setState({ ...state, relocations: { ...state.relocations, [captured.operationId]: journal } })
+          await this.setState({ ...state,
+            directoryContexts: { ...state.directoryContexts, [captured.sessionId]: contexts },
+            relocations: { ...state.relocations, [captured.operationId]: journal } })
         },
         placed: async (header) => {
           if (header.id !== captured.sessionId || header.cwd !== target.path) throw fail('recovery-required')
@@ -363,18 +408,22 @@ export class WorkspaceRegistry extends Service {
         },
         completed: async (outcome) => {
           const state = this.requireState()
+          if (journal.directoryContexts === undefined) throw fail('recovery-required')
           await this.setState({ ...state, relocations: { ...state.relocations,
-            [captured.operationId]: { ...journal, status: 'completed', result: outcome } } })
+            [captured.operationId]: { ...journal, status: 'completed', result: outcome } },
+          directoryContexts: { ...state.directoryContexts, [captured.sessionId]: journal.directoryContexts } })
           publish()
         },
         rollback: async () => {
+          if (originalContexts === undefined) throw fail('recovery-required')
           await this.requireTable().put(sourceWorkspaceId, source)
           if (sourceWorkspaceId !== captured.targetWorkspaceId) await this.requireTable().put(captured.targetWorkspaceId, target)
           this.headers.set(captured.sessionId, originalHeader)
           this.sessionPaths.set(captured.sessionId, source.path)
           const state = this.requireState()
           await this.setState({ ...state, relocations: { ...state.relocations,
-            [captured.operationId]: { ...journal, status: 'recovered' } } })
+            [captured.operationId]: { ...journal, status: 'recovered' } },
+          directoryContexts: { ...state.directoryContexts, [captured.sessionId]: originalContexts } })
           publish()
         },
       })
@@ -865,6 +914,7 @@ export class WorkspaceRegistry extends Service {
         archivedSessionIds: state.archivedSessionIds,
         pinnedSessionIds: state.pinnedSessionIds,
         relocations: state.relocations,
+        directoryContexts: state.directoryContexts,
       })
     }
     await this.setState({
@@ -873,6 +923,7 @@ export class WorkspaceRegistry extends Service {
       archivedSessionIds: state.archivedSessionIds,
       pinnedSessionIds: state.pinnedSessionIds,
       relocations: state.relocations,
+      directoryContexts: state.directoryContexts,
     })
   }
 

@@ -781,6 +781,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   WorkspaceSessionRelocationRequest: 'workspace.md',
   WorkspaceSessionRelocationResult: 'workspace.md',
   WorkspaceRelocationCallbacks: 'workspace.md',
+  SessionDirectoryContext: 'workspace.md',
+  SessionDirectoryObservation: 'workspace.md',
   SessionRelocateRequest: 'session.md',
   SessionRelocateValue: 'session.md',
   SessionRelocationInfo: 'session.md',

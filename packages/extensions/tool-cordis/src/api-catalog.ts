@@ -3739,6 +3739,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'whether its durable relocation has no terminal outcome.',
       },
       {
+        signature: 'async sessionDirectoryContexts(observation: SessionDirectoryObservation): Promise<readonly SessionDirectoryContext[] | undefined>',
+        description: 'Capture a Session\'s directory history before publishing its lifecycle or showing relative references. Fork prefixes copy the parent\'s recorded contexts and remain independent afterwards.',
+        parameters: [{ name: 'observation', description: 'current header, inherited cut and event count from the Session owner or reader.' }],
+        returns: 'immutable contexts, or undefined when older relocation metadata cannot establish them.',
+      },
+      {
         signature: 'relocateSession( request: WorkspaceSessionRelocationRequest, apply: (request: SessionRelocationRequest, callbacks: WorkspaceRelocationCallbacks) => Promise<SessionRelocationResult>, ): Promise<WorkspaceSessionRelocationResult>',
         description: 'Serialize workspace membership with the native lifecycle and durable recovery intent.',
         parameters: [{ name: 'request', description: 'observed source and registered target identity.' }, { name: 'apply', description: 'native lifecycle owner retaining admission and the physical write lease.' }],
@@ -6567,6 +6573,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionCreateValue {\n    readonly sessionId: SessionId;\n    readonly agentPreset?: string;\n}',
   },
   {
+    name: 'SessionDirectoryContext',
+    declaration: 'export interface SessionDirectoryContext {\n    readonly fromEvent: SessionLogOffset;\n    readonly cwd: string;\n}',
+  },
+  {
+    name: 'SessionDirectoryObservation',
+    declaration: 'export interface SessionDirectoryObservation {\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly eventCount: SessionLogOffset;\n}',
+  },
+  {
     name: 'SessionEvent',
     declaration: 'export type SessionEvent<T extends SessionEventType = SessionEventType> = {\n    [K in SessionEventType]: {\n        type: K;\n        seq: SessionSeq;\n        time: number;\n        data: SessionEventMap[K];\n        ignorable?: true;\n    } & (K extends SurfaceEventType ? SurfaceIntent<K> : {\n        surfaceOp?: never;\n        sourceEventSeqs?: never;\n    });\n}[T];',
   },
@@ -6652,7 +6666,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionFollowFrame',
-    declaration: 'export type SessionFollowFrame = {\n    readonly type: \'snapshot\';\n    readonly header: SessionWireHeader;\n    readonly cursor: number;\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n    readonly projections: SessionProjectionBaseline;\n    readonly assistantStream?: SessionAssistantStreamBaseline;\n} | SessionEventEntry | {\n    readonly type: \'assistant-stream\';\n    readonly frame: SessionAssistantStreamFrame;\n};',
+    declaration: 'export type SessionFollowFrame = {\n    readonly type: \'snapshot\';\n    readonly header: SessionWireHeader;\n    readonly cursor: number;\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n    readonly projections: SessionProjectionBaseline;\n    readonly directoryContexts?: readonly SessionDirectoryContext[];\n    readonly assistantStream?: SessionAssistantStreamBaseline;\n} | SessionEventEntry | {\n    readonly type: \'assistant-stream\';\n    readonly frame: SessionAssistantStreamFrame;\n};',
   },
   {
     name: 'SessionFollowRequest',
@@ -6768,7 +6782,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionPage',
-    declaration: 'export interface SessionPage {\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n}',
+    declaration: 'export interface SessionPage {\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n    readonly directoryContexts?: readonly SessionDirectoryContext[];\n}',
   },
   {
     name: 'SessionPageRequest',
@@ -6868,7 +6882,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionRelocationInfo',
-    declaration: 'export interface SessionRelocationInfo {\n    readonly supported: boolean;\n    readonly cwd?: string;\n    readonly revision?: string;\n}',
+    declaration: 'export interface SessionRelocationInfo {\n    readonly supported: boolean;\n    readonly cwd?: string;\n    readonly revision?: string;\n    readonly directoryContexts?: readonly SessionDirectoryContext[];\n}',
   },
   {
     name: 'SessionRelocationOptions',
@@ -8228,7 +8242,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WorkspaceRelocationCallbacks',
-    declaration: 'export interface WorkspaceRelocationCallbacks {\n    prepare(): Promise<void>;\n    placed(header: SessionHeader): Promise<void>;\n    completed(result: SessionRelocationResult): Promise<void>;\n    rollback(header: SessionHeader | undefined): Promise<void>;\n}',
+    declaration: 'export interface WorkspaceRelocationCallbacks {\n    prepare(observation: SessionDirectoryObservation): Promise<void>;\n    placed(header: SessionHeader): Promise<void>;\n    completed(result: SessionRelocationResult): Promise<void>;\n    rollback(header: SessionHeader | undefined): Promise<void>;\n}',
   },
   {
     name: 'WorkspaceRenameRequest',

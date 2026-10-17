@@ -12,6 +12,7 @@ import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import { SessionAlreadyOwnedError, SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
@@ -297,13 +298,19 @@ export class SessionController extends TypertRemoteService {
     const persistence = this.ctx.get('sessionPersistence')
     const supported = persistence?.supportsRelocation === true && typeof this.ctx.get('agentLoop')?.relocate === 'function'
       && typeof this.ctx.workspaceRegistry.relocateSession === 'function'
+      && typeof this.ctx.workspaceRegistry.sessionDirectoryContexts === 'function'
     if (!supported) return { supported: false }
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     const live = this.ctx.sessions.get(request.sessionId)
     if (live !== undefined) await this.ctx.sessions.flush(live)
     const snapshot = await persistence.stat(request.sessionId, { signal })
-    return snapshot === undefined || snapshot.header.cwd === undefined
-      ? { supported: false }
-      : { supported, cwd: snapshot.header.cwd, revision: snapshot.revision }
+    if (snapshot === undefined || snapshot.header.cwd === undefined) return { supported: false }
+    using observation = await this.ctx.sessionQuery.observeSession(request.sessionId, { signal })
+    if (hasApiSessionSubagentOwner(this.ctx, observation, this.ctx.agents.get(request.sessionId))) return { supported: false }
+    const directoryContexts = await this.ctx.workspaceRegistry.sessionDirectoryContexts({ header: snapshot.header,
+      inheritedEventCount: observation.inheritedEventCount, eventCount: SessionLogOffset(observation.events.length) })
+    return directoryContexts === undefined ? { supported: false }
+      : { supported, cwd: snapshot.header.cwd, revision: snapshot.revision, directoryContexts }
   }
 
   /**

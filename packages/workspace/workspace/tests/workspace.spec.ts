@@ -15,7 +15,7 @@ import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persis
 import { MemoryMediaPool, MemoryStorageBackend } from '../../../storage/storage-domain/tests/helpers/memory-backend.ts'
 import WorkspaceRegistry, {
   WorkspaceId,
-  type workspaceDomainState,
+  workspaceDomainState,
   WorkspaceMoveInvalidError,
   WorkspaceOrderInvalidError,
 } from '../src/index.ts'
@@ -23,6 +23,23 @@ import type { WorkspaceDomainState, WorkspaceRecord } from '../src/index.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath } from '../src/paths.ts'
 
 const DOMAIN_VERSION = 2
+
+describe('durable event-directory history', () => {
+  it('accepts ordered ranges without changing their directories or offsets', () => {
+    expect(workspaceDomainState.parse({ initialized: true, workspaceIds: [], directoryContexts: { chat: [
+      { fromEvent: 0, cwd: '/a' }, { fromEvent: 4, cwd: '/b' },
+    ] } }).directoryContexts.chat).toEqual([{ fromEvent: 0, cwd: '/a' }, { fromEvent: 4, cwd: '/b' }])
+  })
+  it.each([
+    [], [{ fromEvent: 1, cwd: '/a' }],
+    [{ fromEvent: 0, cwd: '/a' }, { fromEvent: 0, cwd: '/b' }],
+    [{ fromEvent: 0, cwd: '/a' }, { fromEvent: 2, cwd: '/b' }, { fromEvent: 1, cwd: '/c' }],
+    [{ fromEvent: 0, cwd: '' }],
+  ].map(contexts => ({ contexts })))('refuses incomplete or ambiguous persisted ranges %#', ({ contexts }) => {
+    expect(workspaceDomainState.safeParse({ initialized: true, workspaceIds: [],
+      directoryContexts: { chat: contexts } }).success).toBe(false)
+  })
+})
 
 const header = (id: string, cwd?: string, createdAt = 0): SessionHeader => ({
   version: SESSION_FORMAT_VERSION,
@@ -204,7 +221,7 @@ describe('WorkspaceRegistry lifecycle and bootstrap', () => {
     expect(ctx.workspaceRegistry.list()).toEqual([])
     expect(list).toHaveBeenCalledTimes(1)
     expect(storedState(pool)).toEqual({
-      relocations: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
+      relocations: {}, directoryContexts: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
     })
   })
 
@@ -235,7 +252,7 @@ describe('WorkspaceRegistry lifecycle and bootstrap', () => {
       ['newer-only'],
       ['older-latest', 'older-first'],
     ])
-    expect(storedState(result.pool)).toEqual({ relocations: {},
+    expect(storedState(result.pool)).toEqual({ relocations: {}, directoryContexts: {},
       initialized: true,
       workspaceIds: result.registry.list().map(workspace => workspace.id),
       archivedSessionIds: [],
@@ -269,7 +286,7 @@ describe('WorkspaceRegistry lifecycle and bootstrap', () => {
     expect(second.list).not.toHaveBeenCalled()
     expect(second.registry.list()).toEqual([])
     expect(storedState(pool)).toEqual({
-      relocations: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
+      relocations: {}, directoryContexts: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
     })
   })
 
@@ -525,7 +542,7 @@ describe('WorkspaceRegistry create and lookup', () => {
     expect(result.registry.get(workspace.id)).toBeUndefined()
     expect(result.registry.list()).toEqual([])
     expect(storedState(result.pool)).toEqual({
-      relocations: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
+      relocations: {}, directoryContexts: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
     })
     expect(result.pool.media.get('workspace')!.tables.get('workspaces')!.has(workspace.id)).toBe(false)
     await expect(realpath(dir)).resolves.toBe(dir)
@@ -566,7 +583,7 @@ describe('WorkspaceRegistry create and lookup', () => {
 
     await expect(first.registry.delete(workspace.id)).resolves.toBe(true)
     expect(first.registry.list()).toEqual([])
-    expect(storedState(pool)).toEqual({ relocations: {},
+    expect(storedState(pool)).toEqual({ relocations: {}, directoryContexts: {},
       initialized: true,
       workspaceIds: [],
       archivedSessionIds: [],
@@ -575,7 +592,7 @@ describe('WorkspaceRegistry create and lookup', () => {
     })
     const reregistered = await first.registry.create(dir)
     expect(reregistered.id).not.toBe(workspace.id)
-    expect(storedState(pool)).toEqual({ relocations: {},
+    expect(storedState(pool)).toEqual({ relocations: {}, directoryContexts: {},
       initialized: true,
       workspaceIds: [reregistered.id],
       archivedSessionIds: [],
@@ -860,7 +877,7 @@ describe('header-validated membership projection', () => {
     expect(createRecovery.registry.list()).toEqual([])
     expect(interruptedCreate.media.get('workspace')!.tables.get('workspaces')!.has(createId)).toBe(false)
     expect(storedState(interruptedCreate)).toEqual({
-      relocations: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
+      relocations: {}, directoryContexts: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
     })
 
     const interruptedDelete = storedPool(
@@ -875,7 +892,7 @@ describe('header-validated membership projection', () => {
     expect(deleteRecovery.registry.list()).toEqual([])
     expect(interruptedDelete.media.get('workspace')!.tables.get('workspaces')!.has(deleteId)).toBe(false)
     expect(storedState(interruptedDelete)).toEqual({
-      relocations: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
+      relocations: {}, directoryContexts: {}, initialized: true, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [],
     })
 
     const corruptPending = storedPool(

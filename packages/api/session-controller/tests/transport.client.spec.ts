@@ -7,7 +7,8 @@ import {
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { streamHandle } from '@deepseek-ai/dsh-remote-mock'
 import { LlmAttemptId } from '@deepseek-ai/dsh-llm'
-import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session/types'
+import { SESSION_FORMAT_VERSION, SessionLogOffset } from '@deepseek-ai/dsh-session/types'
+import { Session } from '../src/client/sessions/session.ts'
 import type { RemoteResult, RemoteStreamHandle } from '@deepseek-ai/dsh-typert-protocol'
 import {
   createSessionControlStream,
@@ -242,6 +243,18 @@ describe.each(['snapshot', 'live', 'page'] as const)('Session %s wire acceptance
 })
 
 describe('Session Client stream adapters', () => {
+  it('publishes directory history with the authoritative Session window', async () => {
+    const directoryContexts = [{ fromEvent: SessionLogOffset(0), cwd: '/project-a' },
+      { fromEvent: SessionLogOffset(4), cwd: '/project-b' }]
+    const opening = snapshot(5, [entry(5)], true)
+    if (opening.type !== 'snapshot') throw new Error('fixture requires snapshot')
+    const remote = new ScriptedSessionRemote([{ frames: [{ ...opening, directoryContexts }], hold: true }], [])
+    const session = new Session(ADDRESS.sessionId, sessionClient(remote))
+    try {
+      await session.open()
+      expect(session.getSnapshot().directoryContexts).toEqual(directoryContexts)
+    } finally { await session.dispose() }
+  })
   it('preserves current envelopes and payloads without normalization across every journal path', async () => {
     const events: SessionWireEvent[] = [
       surfaceEvent(),

@@ -166,6 +166,28 @@ interface SessionActivity {
 
 [`dsh-workspace-controller`](../../packages/api/workspace-controller) 经 `ctx.workspaceRegistry` 向 GUI 客户端提供工作区 CRUD，[`dsh-session-controller`](../../packages/api/session-controller) 执行上文「先建会话再 attach」的流程。[dsh-agent-instructions](../../packages/context/agent-instructions) 尽管名字如此，却**不是**消费方：它在 agent 自己的 cwd 下发现 AGENTS.md 风格的指令文件，从不触碰 `ctx.workspaceRegistry`——两者共用的这个词指的是用户的工作目录，而非本注册表的实体。
 
+<a id="history-directory-contexts"></a>
+## 事件目录
+
+`SessionDirectoryContext` 通过包含起点的事件偏移标识相对引用所用的目录。分叉会话复制继承区间；父会话后续迁移不会修改这些副本。
+
+```ts type-equiv
+/** Directory used to resolve relative references starting at one inclusive event offset. */
+interface SessionDirectoryContext {
+  readonly fromEvent: SessionLogOffset
+  readonly cwd: string
+}
+```
+
+```ts type-equiv
+/** Lifecycle-owned history observation used to preserve relative references without editing events. */
+interface SessionDirectoryObservation {
+  readonly header: SessionHeader
+  readonly inheritedEventCount: SessionLogOffset
+  readonly eventCount: SessionLogOffset
+}
+```
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -520,6 +542,14 @@ get(id: WorkspaceId): Workspace | undefined
  * @returns whether its durable relocation has no terminal outcome.
  */
 hasPendingRelocation(sessionId: SessionId): boolean
+
+/**
+ * Capture a Session's directory history before publishing its lifecycle or showing relative references.
+ * Fork prefixes copy the parent's recorded contexts and remain independent afterwards.
+ * @param observation - current header, inherited cut and event count from the Session owner or reader.
+ * @returns immutable contexts, or undefined when older relocation metadata cannot establish them.
+ */
+async sessionDirectoryContexts(observation: SessionDirectoryObservation): Promise<readonly SessionDirectoryContext[] | undefined>
 
 /**
  * Serialize workspace membership with the native lifecycle and durable recovery intent.

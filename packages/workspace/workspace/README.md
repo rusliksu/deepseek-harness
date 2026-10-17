@@ -189,4 +189,6 @@ This Dev Note is working context for maintainers: open questions and directions 
 
 The `title` parameter has no production caller since the gateway's create-by-name branch was removed; a code TODO proposes dropping the parameter and its `@param` clause together ([note](../../../.agents/notes/archived/simplification/2026-07-31-one-route-to-add-a-workspace.md)).
 
+`sessionDirectoryContexts` preserves the directory of each event range outside the Session log. The lifecycle captures the initial ranges before publication, copies inherited ranges into a fork, and commits the next range together with the relocation result. Rollback keeps the original ranges. Hosts refuse relocation when older metadata cannot establish a historical directory; ordinary chat reading remains available.
+
 </details>

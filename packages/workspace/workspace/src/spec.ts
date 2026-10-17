@@ -7,7 +7,7 @@
 
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset, type SessionId } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { WorkspaceId } from './types.ts'
@@ -53,6 +53,12 @@ const relocationResult = z.object({
   revision: z.string().transform(SessionPersistenceRevision),
 })
 
+const directoryContexts = z.array(z.object({
+  fromEvent: z.number().int().nonnegative().transform(SessionLogOffset), cwd: z.string().min(1),
+})).min(1).refine(contexts => contexts[0]?.fromEvent === 0
+  && contexts.every((context, index) => index === 0 || context.fromEvent > (contexts[index - 1]?.fromEvent ?? -1)),
+{ message: 'directory contexts must start at zero and have strictly increasing event offsets' })
+
 const workspaceRelocation = z.object({
   request: relocationRequest,
   sourceWorkspaceId: workspaceId,
@@ -60,6 +66,7 @@ const workspaceRelocation = z.object({
   target: workspaceRecord,
   status: z.enum(['prepared', 'completed', 'recovered']),
   result: relocationResult.optional(),
+  directoryContexts: directoryContexts.optional(),
 })
 
 /**
@@ -84,6 +91,8 @@ export const workspaceDomainState = z.object({
   pendingMutation: workspacePendingMutation.optional(),
   /** Exact retry outcomes and unfinished cross-owner recovery intents. */
   relocations: z.record(z.string(), workspaceRelocation).default({}),
+  /** Independent event-directory history, including copied fork prefixes. */
+  directoryContexts: z.record(z.string(), directoryContexts).default({}),
 })
 
 /** Durable registry state inferred from {@link workspaceDomainState}. */
@@ -100,7 +109,7 @@ export const workspaceDomainSpec = defineDomain({
   version: 2,
   global: {
     schema: workspaceDomainState,
-    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [], relocations: {} },
+    initial: { initialized: false, workspaceIds: [], archivedSessionIds: [], pinnedSessionIds: [], relocations: {}, directoryContexts: {} },
   },
   tables: { workspaces: domainTable<WorkspaceId, WorkspaceRecord>(workspaceRecord) },
 })

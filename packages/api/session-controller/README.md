@@ -126,7 +126,7 @@ No direct effect; model requests remain owned by the Agent and LLM packages.
 
 None.
 
-`session.relocationInfo` reads relocation support, cwd, and a persisted revision without activating the chat. `session.relocate` requires an operation UUID, that exact observation, and an existing local Workspace id. It preserves the Session identity and history, refuses busy or unsupported state, and returns only after storage, Workspace membership, and the reconstructed Agent agree. Repeating the same completed operation returns its durable result; changing its parameters is a conflict. Existing history followers end after relocation settlement and reopen the same identity.
+`session.relocationInfo` reads relocation support, cwd, a persisted revision, and event-directory ranges without activating the chat. `session.relocate` requires an operation UUID, that exact observation, and an existing local Workspace id. It preserves the Session identity and history, refuses busy or unsupported state, and returns only after storage, Workspace membership, and the reconstructed Agent agree. Repeating the same completed operation returns its durable result; changing its parameters is a conflict. Existing history followers end after relocation settlement and reopen the same identity.
 
 </details>
 

@@ -20,6 +20,7 @@ describe('Session Controller native relocation', () => {
     const controller = createSessionTestController(f.ctx, {
       cwd: f.a, defaultModelSelection: () => ({ provider: 'unchanged', model: 'unchanged' }),
     })
+    expect(await controller.relocationInfo({ sessionId: id }, new AbortController().signal)).toEqual({ supported: false })
     await expect(controller.relocate({ ...f.request, sessionId: id, expectedRevision: snapshot.revision }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'session/relocate-unsupported' })
     expect(f.wa.sessionIds).toContain(id)
@@ -53,11 +54,15 @@ describe('Session Controller native relocation', () => {
     })
     const signal = new AbortController().signal
     const info = await controller.relocationInfo({ sessionId: f.id }, signal)
-    expect(info).toEqual({ supported: true, cwd: f.a, revision: f.request.expectedRevision })
+    expect(info).toEqual({ supported: true, cwd: f.a, revision: f.request.expectedRevision,
+      directoryContexts: [{ fromEvent: 0, cwd: f.a }] })
     const result = await controller.relocate(f.request, signal)
     expect(result).toMatchObject({ sessionId: f.id, cwd: f.b, targetWorkspaceId: f.wb.id })
     expect(f.ctx.sessions.list().filter(session => session.id === f.id)).toHaveLength(1)
     expect(f.ctx.agents.get(f.id)?.session.header.cwd).toBe(f.b)
+    expect((await controller.relocationInfo({ sessionId: f.id }, signal)).directoryContexts).toEqual([
+      { fromEvent: 0, cwd: f.a }, { fromEvent: 2, cwd: f.b },
+    ])
     const composition = vi.spyOn(ApiSessionAgentController.prototype, 'composeAgent').mockRejectedValue(new Error('preset unavailable'))
     try {
       expect(await controller.relocate(f.request, signal)).toEqual(result)

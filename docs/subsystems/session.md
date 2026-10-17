@@ -766,6 +766,10 @@ The backends that consume this contract are on [persistence.md](persistence.md).
 
 The optional `application` selects a registered file handler without changing the system default; `workspacePathApplications({ path })` returns current handlers, names, icons, and default selection after Host path verification.
 
+## History directory metadata
+
+`SessionPage` and the opening `SessionFollowFrame` may carry `directoryContexts`. The Client publishes these ranges in `SessionSnapshot` with the history window; a relocation reopens the stream with a replacement baseline. The ranges use [Workspace event directories](workspace.md#history-directory-contexts) and do not alter Session events.
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>

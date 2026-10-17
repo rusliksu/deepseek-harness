@@ -228,4 +228,6 @@ These limits define when the loop needs special care. They are current package c
 
 None.
 
+The lifecycle captures event-directory ranges through Workspace before publication and supplies the quiescent event frontier to relocation. The Session log remains unchanged; the range metadata preserves the meaning of relative references.
+
 </details>

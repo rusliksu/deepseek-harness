@@ -166,6 +166,28 @@ interface SessionActivity {
 
 [`dsh-workspace-controller`](../../packages/api/workspace-controller) serves workspace CRUD to GUI clients over `ctx.workspaceRegistry`, and [`dsh-session-controller`](../../packages/api/session-controller) performs the create-session-then-attach flow above. [dsh-agent-instructions](../../packages/context/agent-instructions) is **not** a consumer despite the name: it discovers AGENTS.md-style instruction files under an agent's own cwd and never touches `ctx.workspaceRegistry` — the shared word refers to the user's working directory, not to this registry's entities.
 
+<a id="history-directory-contexts"></a>
+## Event directories
+
+`SessionDirectoryContext` identifies the directory for relative references at an inclusive event offset. Forks copy inherited ranges; subsequent parent moves cannot change those copies.
+
+```ts type-equiv
+/** Directory used to resolve relative references starting at one inclusive event offset. */
+interface SessionDirectoryContext {
+  readonly fromEvent: SessionLogOffset
+  readonly cwd: string
+}
+```
+
+```ts type-equiv
+/** Lifecycle-owned history observation used to preserve relative references without editing events. */
+interface SessionDirectoryObservation {
+  readonly header: SessionHeader
+  readonly inheritedEventCount: SessionLogOffset
+  readonly eventCount: SessionLogOffset
+}
+```
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -520,6 +542,14 @@ get(id: WorkspaceId): Workspace | undefined
  * @returns whether its durable relocation has no terminal outcome.
  */
 hasPendingRelocation(sessionId: SessionId): boolean
+
+/**
+ * Capture a Session's directory history before publishing its lifecycle or showing relative references.
+ * Fork prefixes copy the parent's recorded contexts and remain independent afterwards.
+ * @param observation - current header, inherited cut and event count from the Session owner or reader.
+ * @returns immutable contexts, or undefined when older relocation metadata cannot establish them.
+ */
+async sessionDirectoryContexts(observation: SessionDirectoryObservation): Promise<readonly SessionDirectoryContext[] | undefined>
 
 /**
  * Serialize workspace membership with the native lifecycle and durable recovery intent.

@@ -2386,6 +2386,16 @@
       "doc": "docs/subsystems/persistence.md",
       "symbol": "SessionRelocationOptions",
       "source": "packages/session/session-persistence/src/relocation.ts"
+    },
+    {
+      "doc": "docs/subsystems/workspace.md",
+      "symbol": "SessionDirectoryContext",
+      "source": "packages/workspace/workspace/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/workspace.md",
+      "symbol": "SessionDirectoryObservation",
+      "source": "packages/workspace/workspace/src/types.ts"
     }
   ]
 }

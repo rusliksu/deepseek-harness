@@ -190,4 +190,6 @@ ctx.workspaceRegistry.list() // shows the project, newest first
 
 网关的按名称创建分支移除后，`title` 参数已无生产调用方；代码中的 TODO 提议把该参数与其 `@param` 子句一并移除（参见[笔记](../../../.agents/notes/archived/simplification/2026-07-31-one-route-to-add-a-workspace.md)）。
 
+`sessionDirectoryContexts` 在 Session 日志之外保留每段事件的目录。生命周期在发布前记录初始区间，将继承区间复制到分叉会话，并将下一区间与迁移结果一起提交。回滚保留原始区间。若旧元数据无法确定历史目录，主机拒绝迁移；普通聊天读取仍然可用。
+
 </details>
