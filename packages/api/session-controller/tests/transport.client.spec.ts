@@ -9,6 +9,7 @@ import { streamHandle } from '@deepseek-ai/dsh-remote-mock'
 import { LlmAttemptId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionLogOffset } from '@deepseek-ai/dsh-session/types'
 import { Session } from '../src/client/sessions/session.ts'
+import { SessionManager } from '../src/client/sessions/manager.ts'
 import type { RemoteResult, RemoteStreamHandle } from '@deepseek-ai/dsh-typert-protocol'
 import {
   createSessionControlStream,
@@ -243,6 +244,56 @@ describe.each(['snapshot', 'live', 'page'] as const)('Session %s wire acceptance
 })
 
 describe('Session Client stream adapters', () => {
+  it.each(['event', 'list'] as const)('restores a retained same-ID Session and its directory baseline through %s', async (source) => {
+    const initial = [{ fromEvent: SessionLogOffset(0), cwd: '/project-a' }]
+    const relocated = [...initial, { fromEvent: SessionLogOffset(1), cwd: '/project-b' }]
+    const first = snapshot(0, [entry(0)])
+    const second = snapshot(1, [entry(0), entry(1)])
+    if (first.type !== 'snapshot' || second.type !== 'snapshot') throw new Error('fixture requires snapshots')
+    const remote = new ScriptedSessionRemote([
+      { frames: [{ ...first, directoryContexts: initial }], hold: true },
+      { frames: [{ ...second, directoryContexts: relocated }], hold: true },
+    ], [])
+    const manager = new SessionManager(sessionClient(remote))
+    const summary = (cwd: string) => ({
+      sessionId: ADDRESS.sessionId, updatedAt: 0, running: false, agentAvailable: true, blank: false, cwd,
+    })
+    Object.assign(remote, { list: vi.fn().mockResolvedValue({ ok: true, value: { items: [summary('/project-b')] } }) })
+    try {
+      manager.handleSessionAdded(summary('/project-a'))
+      const session = manager.get(ADDRESS.sessionId)
+      const other = manager.get('other-session' as never)
+      await session.open()
+      manager.handleSessionRemoved(ADDRESS.sessionId)
+      expect(session.getSnapshot().removed).toBe(true)
+      if (source === 'event') manager.handleSessionAdded(summary('/project-b'))
+      else await manager.refreshList()
+      expect(manager.get(ADDRESS.sessionId)).toBe(session)
+      expect(session.getSnapshot().removed).toBe(false)
+      await vi.waitFor(() => { expect(session.getSnapshot().directoryContexts).toEqual(relocated) })
+      expect(remote.followRequests).toHaveLength(2)
+      expect(manager.getListSnapshot().items.find(row => row.sessionId === ADDRESS.sessionId)?.cwd).toBe('/project-b')
+      expect(manager.get('other-session' as never)).toBe(other)
+      expect(other.getSnapshot().openState).toBe('cold')
+      manager.handleSessionAdded(summary('/project-b'))
+      await Promise.resolve()
+      expect(remote.followRequests).toHaveLength(2)
+    } finally { await manager.dispose() }
+  })
+
+  it('restores a cold same-ID Session without opening history or replacing its instance', async () => {
+    const remote = new ScriptedSessionRemote([], [])
+    const manager = new SessionManager(sessionClient(remote))
+    try {
+      const session = manager.get(ADDRESS.sessionId)
+      manager.handleSessionRemoved(ADDRESS.sessionId)
+      manager.handleSessionAdded({ sessionId: ADDRESS.sessionId, updatedAt: 0, running: false, agentAvailable: true, blank: false })
+      expect(manager.get(ADDRESS.sessionId)).toBe(session)
+      expect(session.getSnapshot()).toMatchObject({ removed: false, openState: 'cold' })
+      expect(remote.followRequests).toHaveLength(0)
+    } finally { await manager.dispose() }
+  })
+
   it('publishes directory history with the authoritative Session window', async () => {
     const directoryContexts = [{ fromEvent: SessionLogOffset(0), cwd: '/project-a' },
       { fromEvent: SessionLogOffset(4), cwd: '/project-b' }]

@@ -486,10 +486,11 @@ export class Session implements SessionFace {
    *  reconnecting control stream and remains untouched. */
   async resync(): Promise<void> {
     if (this.openState === 'cold') return // never opened: no window to rebuild (doOpen flips to 'loading' synchronously, so cold implies no in-flight open)
-    this.openGeneration++
+    const generation = ++this.openGeneration
     const events = this.events
     this.events = undefined
     await events?.dispose()
+    if (generation !== this.openGeneration) return
     this.openPromise = null
     this.openState = 'cold'
     this.openError = null
@@ -576,6 +577,21 @@ export class Session implements SessionFace {
     if (blank && (this.promptAttempted || this.running)) return
     this.blankBit = blank
     this.notifier.markDirty()
+  }
+
+  /** Restore the same retained Client identity after the Host publishes its replacement. */
+  handleAdded(): void {
+    if (!this.removed) return
+    this.removed = false
+    this.notifier.markDirty()
+    const refresh = this.resync()
+    const generation = this.openGeneration
+    void refresh.catch((error: unknown) => {
+      if (generation !== this.openGeneration) return
+      this.openState = 'error'
+      this.openError = new RemoteError('gateway/internal', 'Session history refresh failed', {}, { cause: error })
+      this.notifier.markDirty()
+    })
   }
 
   /** `api-session/removed` relay: flag the snapshot while retaining the resident instance. */
