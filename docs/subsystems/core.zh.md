@@ -21,6 +21,8 @@
 
 <a id="creation-and-ownership"></a>
 
+原生 Session 控制器通过 [Workspace 所有者回调](../../packages/workspace/workspace/src/index.ts)调用 `AgentLoop.relocate`；普通创建仍通过 `ctx.agents`。操作准入与确切实例阻止延迟输入到达替代实例。
+
 ## 创建与所有权
 
 消费方通过 `ctx.agents` 创建 agent——`create()` 在一个调用方提供的 `SessionId` 下构建全新会话与 agent，`resume()` 先加载持久会话——或者通过循环的声明式配置条目创建。编程式创建返回归属所有者的句柄：
@@ -488,9 +490,20 @@ async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<Agent
  * @returns the published handle.
  */
 async resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>
+
+/**
+ * Replace an idle owned incarnation while retaining its exact storage lease.
+ * Recovery intent and related records are committed by their native owner.
+ * @param ownerCtx - existing lifecycle owner, or owner for a cold identity.
+ * @param request - exact storage observation and operation identity.
+ * @param options - composition and model route for a cold identity.
+ * @param callbacks - related durable records and final operation outcome.
+ * @returns the committed placement with its revision after replacement flush.
+ */
+relocate( ownerCtx: Context, request: SessionRelocationRequest, options: Omit<ResumeAgentOptions, 'resumeSessionId' | 'parentAgent'>, callbacks: WorkspaceRelocationCallbacks, ): Promise<SessionRelocationResult>
 ```
 
-Types: [SessionHeader](persistence.zh.md)
+Types: [SessionHeader](persistence.zh.md) · [SessionRelocationRequest](persistence.zh.md) · [SessionRelocationResult](persistence.zh.md) · [WorkspaceRelocationCallbacks](workspace.zh.md)
 
 Source: [`packages/core/agent-loop/src/index.ts`](../../packages/core/agent-loop/src/index.ts)
 
@@ -775,6 +788,26 @@ Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index
 
 ### `agent/*` events
 
+<a id="agentadmit-operation--bail"></a>
+
+#### `agent/admit-operation` — bail
+
+Reserve ordinary work before its first side effect; the lifecycle owner rejects while relocation owns the identity. Hold the result through all asynchronous preparation and registration. Absence means this factory does not implement relocation admission.
+
+```ts cordis-catalog
+/**
+ * Reserve ordinary work before its first side effect; the lifecycle owner
+ * rejects while relocation owns the identity. Hold the result through all
+ * asynchronous preparation and registration. Absence means this factory
+ * does not implement relocation admission.
+ * @param request - identity and optional exact incarnation accepting work.
+ * @mode bail
+ */
+'agent/admit-operation'(request: { sessionId: SessionId; agent?: Agent }): Disposable | undefined
+```
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
+
 <a id="agentassistant-stream--emit"></a>
 
 #### `agent/assistant-stream` — emit
@@ -959,6 +992,26 @@ Reject a proposed step or replace the messages that enter it. Calling `next()` p
 ```
 
 Types: [Scoped](scope.zh.md) · [UserMessage](session.zh.md)
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
+
+<a id="agentrelocation-check--serial"></a>
+
+#### `agent/relocation-check` — serial
+
+Refuse teardown while a native owner retains unique non-transferable state. Scope-filtered dispatch reaches the exact Agent and its preset owners.
+
+```ts cordis-catalog
+/**
+ * Refuse teardown while a native owner retains unique non-transferable state.
+ * Scope-filtered dispatch reaches the exact Agent and its preset owners.
+ * @param request - exact incarnation reserved against new work.
+ * @mode serial
+ */
+'agent/relocation-check'(this: Scoped<Agent>, request: { agent: Agent }): Promise<void> | void
+```
+
+Types: [Scoped](scope.zh.md)
 
 Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
 

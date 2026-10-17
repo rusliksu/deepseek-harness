@@ -116,6 +116,8 @@ Each driver runs its complete lifetime inside `ctx.agents.withInitiator(agent, .
 
 The `AgentHandle` disposer is a capability: among consumers, only its holder can tear the agent down. The registered factory provider is a structural co-owner, because scoped agents depend on that provider's service API; provider unload stops and drains every live handle it made. `ctx.agents.get(id)` still returns a bare `Agent` — the handle is exposed only to the consumer that created it.
 
+The concrete factory implements `agent/admit-operation`: executors hold its disposable result from before their first side effect through asynchronous preparation and registration. The factory refuses an identity reserved for relocation. Native owners use serial `agent/relocation-check` to reject teardown while unique state cannot be reconstructed.
+
 </details>
 
 -----

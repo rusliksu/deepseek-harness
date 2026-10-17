@@ -170,6 +170,17 @@ function scriptedSource(reads: { text: string; lossy?: boolean }[], channel?: 's
 }
 
 describe('LocalJobRegistry.start', () => {
+  it('rejects relocation admission before starting or registering an owned producer', async () => {
+    const ctx = await harness()
+    const owner = await liveAgent(ctx, 'relocating-owner')
+    const job = producer({ owner })
+    ctx.on('agent/admit-operation', () => { throw new Error('relocation owns this session') })
+    expect(() => ctx.jobs.start(job.spec)).toThrow('relocation owns this session')
+    expect(ctx.jobs.list()).toEqual([])
+    expect(() => job.job()).toThrow('producer not started')
+    await ctx.fiber.dispose()
+  })
+
   it('preserves the SessionId brand on public owner projections', () => {
     expectTypeOf<JobView['owner']>().toEqualTypeOf<SessionId | undefined>()
   })

@@ -6,7 +6,7 @@
  */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session/types'
 import type { TypertResource } from '@deepseek-ai/dsh-typert-protocol'
 
 /**
@@ -14,6 +14,19 @@ import type { TypertResource } from '@deepseek-ai/dsh-typert-protocol'
  * normalization rewrites paths, and a reference anchor must stay stable.
  */
 export type WorkspaceId = Branded<'WorkspaceId'>
+
+/** Directory used to resolve relative references starting at one inclusive event offset. */
+export interface SessionDirectoryContext {
+  readonly fromEvent: SessionLogOffset
+  readonly cwd: string
+}
+
+/** Lifecycle-owned history observation used to preserve relative references without editing events. */
+export interface SessionDirectoryObservation {
+  readonly header: SessionHeader
+  readonly inheritedEventCount: SessionLogOffset
+  readonly eventCount: SessionLogOffset
+}
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertResourceMap {

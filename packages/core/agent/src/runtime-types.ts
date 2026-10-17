@@ -10,11 +10,32 @@ import type { Scoped } from '@deepseek-ai/dsh-scope'
 import type {
   LlmAttemptId, LlmCallConfig, LlmFailure, MessageId, ReasoningEffortId, ResolvedRetryPolicy, StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import type { AgentCancelCause, Session, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
+import type { AgentCancelCause, Session, SessionId, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 export type { AgentCancelCause } from '@deepseek-ai/dsh-session'
 import type { Agent, InboxTarget } from './types.ts'
 export type { Agent } from './types.ts'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /**
+     * Reserve ordinary work before its first side effect; the lifecycle owner
+     * rejects while relocation owns the identity. Hold the result through all
+     * asynchronous preparation and registration. Absence means this factory
+     * does not implement relocation admission.
+     * @param request - identity and optional exact incarnation accepting work.
+     * @mode bail
+     */
+    'agent/admit-operation'(request: { sessionId: SessionId; agent?: Agent }): Disposable | undefined
+    /**
+     * Refuse teardown while a native owner retains unique non-transferable state.
+     * Scope-filtered dispatch reaches the exact Agent and its preset owners.
+     * @param request - exact incarnation reserved against new work.
+     * @mode serial
+     */
+    'agent/relocation-check'(this: Scoped<Agent>, request: { agent: Agent }): Promise<void> | void
+  }
+}
 declare module '@deepseek-ai/dsh-system-prompt' {
   interface AssembleContext {
     /** Agent for this assembly; absent on diagnostics. When present, `scope` must identify the same agent. */

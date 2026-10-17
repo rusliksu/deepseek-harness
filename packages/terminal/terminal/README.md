@@ -90,6 +90,8 @@ Each published session is a record of its id, owner, optional name, backend type
 
 The service reserves a session synchronously for one active send before returning the operation, including before a background job id becomes visible; a second send fails with `SEND_ACTIVE`, so output and cancellation never cross operation ownership.
 
+PTY spawn holds native Agent admission through backend setup and publication. Relocation refuses an owner with a pending spawn or a persistent terminal, preserving its process state instead of tearing it down.
+
 </details>
 
 -----

@@ -32,6 +32,7 @@
     {
       "path": "../../core/agent"
     },
+    { "path": "../../core/agent-loop" },
     {
       "path": "../../core/agent-default-model"
     },

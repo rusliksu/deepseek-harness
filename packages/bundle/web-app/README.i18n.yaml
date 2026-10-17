@@ -3,8 +3,11 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/bundle/web-app/README.md
 /:
-  en: af2e4e5296596e8f
-  zh: 70c0b5ac93209d00
+  en: cb3f91d54eee30e5
+  zh: cb3f91d54eee30e5
+/description-the-browser-gui-for-dsh-interactive-chat-model-and-settings-management-and-session-history-for-users-running-the-dsh-web-surface-kind-package-bundle:
+  en: eae47f79cd9681a0
+  zh: 5dd6c9c5d053aea1
 /deepseek-ai-dsh-web-app:
   en: a85684740ecd278a
   zh: 7c54099b9edccf01
@@ -12,8 +15,8 @@
   en: 0a2a9876194543e5
   zh: ff472776a44ae260
 /deepseek-ai-dsh-web-app/table-of-contents:
-  en: d152484eb41ac6b4
-  zh: 09388d293f9be9cb
+  en: eb6ed279e78f8b65
+  zh: 5583226de8ecca29
 /deepseek-ai-dsh-web-app/use-this-package:
   en: 3bd37b85139d2fa7
   zh: ba86c807eb83866e
@@ -21,8 +24,8 @@
   en: e3cac911f080d8ef
   zh: 60749e9f5c39c1bc
 /deepseek-ai-dsh-web-app/use-this-package/configuration:
-  en: b1787804544f2587
-  zh: ce09d2c248ffd999
+  en: cfbb3524363bb537
+  zh: 3c8cc09fcd6d7bb8
 /deepseek-ai-dsh-web-app/use-this-package/listening-trust-and-public-deployments:
   en: e6ddea1d2fc40501
   zh: ff08b6fa3fc24136
@@ -33,8 +36,8 @@
   en: ccd6fc264b51e44b
   zh: 3265c68477a89ec9
 /deepseek-ai-dsh-web-app/understand-the-implementation:
-  en: 323742a00cfe67b2
-  zh: eff5245a82fc16e7
+  en: eaf687f6312c7c2f
+  zh: db03028bda6cf576
 /deepseek-ai-dsh-web-app/understand-the-implementation/patch-semantics:
   en: 8a2554b3d17daa1f
   zh: 66f18946791cabb6
@@ -45,11 +48,11 @@
   en: 973128fd346869df
   zh: 54e6792f9f82a192
 /deepseek-ai-dsh-web-app/understand-the-implementation/source-map:
-  en: 58800b6f2142c34f
-  zh: 10bf512b16db1cb8
+  en: 4f1e52081ed937b7
+  zh: 19836bbf95cd0c00
 /deepseek-ai-dsh-web-app/further-exploration:
-  en: f81694f7424e2988
-  zh: 6643f9227039e228
+  en: ae2375c10296a56a
+  zh: b175f90180ea09a7
 /deepseek-ai-dsh-web-app/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
@@ -66,8 +69,8 @@
   en: 37542a8b81a744f5
   zh: c0048aaadecae296
 /deepseek-ai-dsh-web-app/known-limitations-and-deferred-work:
-  en: 635c1336e2f4e821
-  zh: caabdecb02e2df14
+  en: f4996f23a0562a90
+  zh: c4955ea25379ad10
 /deepseek-ai-dsh-web-app/known-limitations-and-deferred-work/dev-note:
-  en: 3f81b4f3beb74a0d
-  zh: 2e377ca40822d093
+  en: 51a054d28a57f9e5
+  zh: ccd61e1055614033

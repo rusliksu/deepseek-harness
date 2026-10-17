@@ -126,6 +126,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 | [`tests/public-url.spec.ts`](tests/public-url.spec.ts) | 公告根的解析与归一化 |
 | [`tests/browser-open.spec.ts`](tests/browser-open.spec.ts) | 页面可达后的默认浏览器交接 |
 
+Agent-loop 的 Loader 条目注入 `workspaceRegistry`，因此配置的 agent 打开相关身份之前，会先完成未完成的迁移恢复。
+
 </details>
 
 -----

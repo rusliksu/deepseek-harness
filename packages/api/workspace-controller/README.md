@@ -71,4 +71,6 @@ No direct effect; Workspace mutations do not alter model requests.
 
 None.
 
+Workspace feeds suppress partial relocation writes and publish a replacement baseline after the native registry settles both memberships. Existing subscriptions therefore observe the complete committed grouping or its recovered source state.
+
 </details>

@@ -3,8 +3,11 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/workspace/workspace/README.md
 /:
-  en: d112c03aefc9a73d
-  zh: e2ea3f0a9c814a23
+  en: cb3f91d54eee30e5
+  zh: cb3f91d54eee30e5
+/description-workspace-entity-registry-ctx-workspaceregistry-for-hosts-choosing-mounting-or-debugging-durable-workspace-records-and-header-validated-session-membership-kind-package-reference:
+  en: c75473d41bc3df22
+  zh: 85bb0495618bb928
 /deepseek-ai-dsh-workspace:
   en: 7a12adba4e7766e3
   zh: f6d5c8374f4512c8
@@ -12,8 +15,8 @@
   en: 30aea62cabd8e8a8
   zh: b22b30ef08fd4713
 /deepseek-ai-dsh-workspace/table-of-contents:
-  en: d152484eb41ac6b4
-  zh: 09388d293f9be9cb
+  en: eb6ed279e78f8b65
+  zh: 5583226de8ecca29
 /deepseek-ai-dsh-workspace/use-this-package:
   en: 37d744451570942e
   zh: 7f8200725a1cca54
@@ -36,17 +39,17 @@
   en: 7b298aa5c48501d4
   zh: 8ffeec728c1c13fe
 /deepseek-ai-dsh-workspace/understand-the-implementation:
-  en: 447ced401b3b14a8
-  zh: 3ce2105605223945
+  en: 3a8007aa6e3d0ebc
+  zh: 788501c30ab73571
 /deepseek-ai-dsh-workspace/understand-the-implementation/design-philosophy:
-  en: e969314497b99389
-  zh: 82eafc832617a1eb
+  en: b96f24bc673d46ac
+  zh: 989f4ba0f2d53536
 /deepseek-ai-dsh-workspace/understand-the-implementation/api-behavior:
   en: 69327adb9ea52680
   zh: fa32eea5019c7abb
 /deepseek-ai-dsh-workspace/understand-the-implementation/source-map:
-  en: 6899c50041c3d1ef
-  zh: ea70fda89cc50465
+  en: 9b32456828cddf4b
+  zh: 2a93f23707ec1e18
 /deepseek-ai-dsh-workspace/understand-the-implementation/durable-shape:
   en: 056a266f4a15b29d
   zh: e1589f5750662887
@@ -54,11 +57,11 @@
   en: e41db10d48acbf9a
   zh: 457d329fe37ba33c
 /deepseek-ai-dsh-workspace/understand-the-implementation/failure-and-recovery:
-  en: 8b53b9369bea6f67
-  zh: 612fd3439a23e035
+  en: a0c575c183d0bd21
+  zh: e9677297a68e3f8d
 /deepseek-ai-dsh-workspace/further-exploration:
-  en: 642397907af144b3
-  zh: 2b35c1a6237db0c0
+  en: 12c4969f1e213f57
+  zh: 2e4a53a61840042b
 /deepseek-ai-dsh-workspace/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
@@ -75,11 +78,11 @@
   en: 524afbded27fb06b
   zh: 9dcf8539495e9c68
 /deepseek-ai-dsh-workspace/known-limitations-and-deferred-work:
-  en: 1a9c71a3dbfc4506
-  zh: 87b57414053f4d00
+  en: 637fe53d2763de5f
+  zh: a1f1146d1aea0f40
 /deepseek-ai-dsh-workspace/known-limitations-and-deferred-work/dev-note:
-  en: ac1d08360a93382b
-  zh: 6c58749bae9a6e65
+  en: 56d53d5e8277725e
+  zh: 210d193802f0c267
 /deepseek-ai-dsh-workspace/known-limitations-and-deferred-work/dev-note/open-the-create-path-title-title-parameter:
-  en: 65867b2bb7aba416
-  zh: 38547efe92828640
+  en: 0deea341c3df29a9
+  zh: 65906574079a919e

@@ -84,6 +84,8 @@ The system-prompt contribution `approval:policy` states the complete current mea
 
 `request()` appends `approval/asked` with the request identity and tool, then `approval/decided` with the closed outcome; the exact appended fields live in [`src/index.ts`](src/index.ts). Both are log-only.
 
+Changing a live Agent policy acquires operation admission before appending the policy event or queuing its notice. An incarnation reserved for relocation cannot receive a policy change through this executor.
+
 </details>
 
 -----

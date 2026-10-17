@@ -54,6 +54,8 @@ The Host plugin provides `ctx.fileUploads`. It owns the authenticated streaming 
 | [`src/client/runtime.ts`](src/client/runtime.ts) | Dedicated Worker and page-owned carrier implementations |
 | [`src/client/index.ts`](src/client/index.ts) | Client plugin registration and `ctx.fileUpload` declaration |
 
+Uploads hold native operation admission through storage and receipt registration. A staged receipt belongs to its exact live Session incarnation, so relocation refuses teardown while a draft still references staged files; the receipt and bytes remain available to that draft.
+
 </details>
 
 Each upload receipt belongs to one exact Session, and each request uses one selected carrier. Unsupported stream carriers fail before the body is sent.

@@ -19,6 +19,8 @@ A turn flows through the six packages in one loop: the driver in [`agent-loop`](
 
 `scope/` is the one non-service package: a dependency-free library (`createScope`/`scopeOf`/`scopeTarget`) that sits below `session/` and `system-prompt/` in the module graph precisely so they can consume it without a cycle. `agent-loop` is the one concrete implementation of the public `Agent` contract and lives here because it is the harness's default product loop; it runs each driver inside `ctx.agents.withInitiator()`. Extension plugins depend on `agent` — including when they need the initiating Agent — and never on `agent-loop` directly, so the loop stays swappable. [`dsh-base`](../../packages/bundle/base/README.md) is the default product composition, while [`dsh-sdk-minimal`](../../packages/bundle/sdk-minimal/README.md) declares a smaller standalone tree.
 
+The native Session controller consumes `AgentLoop.relocate` with [Workspace-owned callbacks](../../packages/workspace/workspace/src/index.ts); ordinary creation continues through `ctx.agents`. Operation admission and the exact incarnation prevent late input from reaching a replacement.
+
 ## Creation and ownership
 
 Consumers create agents through `ctx.agents` — `create()` builds a fresh session and agent under one caller-supplied `SessionId`, `resume()` loads a persisted session first — or declaratively through the loop's config entries. Programmatic creation returns the owner's handle:
@@ -476,9 +478,20 @@ async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<Agent
  * @returns the published handle.
  */
 async resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>
+
+/**
+ * Replace an idle owned incarnation while retaining its exact storage lease.
+ * Recovery intent and related records are committed by their native owner.
+ * @param ownerCtx - existing lifecycle owner, or owner for a cold identity.
+ * @param request - exact storage observation and operation identity.
+ * @param options - composition and model route for a cold identity.
+ * @param callbacks - related durable records and final operation outcome.
+ * @returns the committed placement with its revision after replacement flush.
+ */
+relocate( ownerCtx: Context, request: SessionRelocationRequest, options: Omit<ResumeAgentOptions, 'resumeSessionId' | 'parentAgent'>, callbacks: WorkspaceRelocationCallbacks, ): Promise<SessionRelocationResult>
 ```
 
-Types: [SessionHeader](persistence.md)
+Types: [SessionHeader](persistence.md) · [SessionRelocationRequest](persistence.md) · [SessionRelocationResult](persistence.md) · [WorkspaceRelocationCallbacks](workspace.md)
 
 Source: [`packages/core/agent-loop/src/index.ts`](../../packages/core/agent-loop/src/index.ts)
 
@@ -763,6 +776,26 @@ Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index
 
 ### `agent/*` events
 
+<a id="agentadmit-operation--bail"></a>
+
+#### `agent/admit-operation` — bail
+
+Reserve ordinary work before its first side effect; the lifecycle owner rejects while relocation owns the identity. Hold the result through all asynchronous preparation and registration. Absence means this factory does not implement relocation admission.
+
+```ts cordis-catalog
+/**
+ * Reserve ordinary work before its first side effect; the lifecycle owner
+ * rejects while relocation owns the identity. Hold the result through all
+ * asynchronous preparation and registration. Absence means this factory
+ * does not implement relocation admission.
+ * @param request - identity and optional exact incarnation accepting work.
+ * @mode bail
+ */
+'agent/admit-operation'(request: { sessionId: SessionId; agent?: Agent }): Disposable | undefined
+```
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
+
 <a id="agentassistant-stream--emit"></a>
 
 #### `agent/assistant-stream` — emit
@@ -947,6 +980,26 @@ Reject a proposed step or replace the messages that enter it. Calling `next()` p
 ```
 
 Types: [Scoped](scope.md) · [UserMessage](session.md)
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
+
+<a id="agentrelocation-check--serial"></a>
+
+#### `agent/relocation-check` — serial
+
+Refuse teardown while a native owner retains unique non-transferable state. Scope-filtered dispatch reaches the exact Agent and its preset owners.
+
+```ts cordis-catalog
+/**
+ * Refuse teardown while a native owner retains unique non-transferable state.
+ * Scope-filtered dispatch reaches the exact Agent and its preset owners.
+ * @param request - exact incarnation reserved against new work.
+ * @mode serial
+ */
+'agent/relocation-check'(this: Scoped<Agent>, request: { agent: Agent }): Promise<void> | void
+```
+
+Types: [Scoped](scope.md)
 
 Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
 

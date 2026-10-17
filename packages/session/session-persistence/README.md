@@ -48,6 +48,15 @@ Service-level `flush()` drains every active write handle's routed events and mat
 
 Every log read and write flows through the returned `SessionHandle`; there are no id-addressed append or load methods. `handle.read(offset?, length?)` returns `{ eventState, events }`: the outer slice belongs to the caller, while `eventState` distinguishes an exclusively `detached` event graph from a `shared-frozen` graph that may also reside in a backend cache. The producer establishes this state and slices preserve it even when empty. Both states are safe to adopt without copying; a consumer that needs mutable events clones them first. Reads never include a torn tail, repeated reads on one handle never observe an older state than a prior read, and a write handle reads its own successful appends. `handle.append(events)` appends a contiguous batch whose first `seq` equals the stored next-seq; persistence is best-effort on resolution — the batch is accepted, ordered, and visible to reads on this backend instance, and only a resolved `flush` promises it survives a crash (the shipped JSONL backend happens to persist each batch immediately). `handle.flush()` is the durability barrier and also materializes an empty created session so it becomes durably listable. `handle.close()` is idempotent and uncancellable: a read handle frees local resources; a write handle completes pending durability and releases write ownership. Once an `append` or `flush` resolves, reads started afterwards on the same backend instance — on any handle, or through `stat`/`list` — observe at least that prefix.
 
+<a id="working-directory-relocation"></a>
+### Working-directory relocation
+
+A provider advertises `supportsRelocation` when it implements `beginRelocation(request)`. The default provider contract refuses unsupported relocation. Requests use a UUID operation identity and the exact observed directory and revision. The returned transaction holds exclusive session ownership through commit or rollback until `close()`; consumers close it in a `finally` block. A repeated committed request returns its original result. The [JSONL provider](../session-persistence-jsonl/README.md#working-directory-transactions) documents format, size, recovery, and physical-location rules.
+
+Passing `{ writer }` to `beginRelocation` retains that exact handle's kernel lease while its agent finishes teardown. After closing the old handle, use `openWriter()` for the committed or restored directory and `complete(writer)` to transfer permanent ownership after verification. Until completion, closing a borrowed writer returns ownership to the transaction for rollback. Closing an abandoned preparation keeps an original handle usable if teardown has not started; retired Session events cannot reach the replacement writer.
+
+The optional `complete(writer, commitRelated)` callback commits related durable records after the final writer drain and flush but before the kernel lease transfers. A callback failure retains transactional ownership so the caller can close the borrowed writer and roll back. A committed operation reopened after a crash can restore its original placement only while that operation still owns the current placement revision.
+
 ### Ownership and visibility
 
 `create` and `open(id, 'write')` take in-process single-writer ownership: a second write open while an owner is active rejects with `SessionAlreadyOwnedError`, `create` on an occupied id rejects with `SessionAlreadyExistsError`, and a mutation on a `read` handle rejects with `SessionReadOnlyError` — one handle type, runtime refusal. Any operation on a closed handle rejects with `SessionHandleClosedError`, and `SessionOwnershipLostError` marks a write handle whose ownership is permanently gone (close it and reopen). A created session is observable in this process from the moment `create` resolves, while the backend may defer physical materialization until the first `append` or `flush`; other processes see only materialized sessions, and a session that never materialized before a crash never existed.
@@ -69,6 +78,7 @@ A stored log the current build cannot faithfully interpret is refused with a dir
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## Understand the implementation
 
 <details>

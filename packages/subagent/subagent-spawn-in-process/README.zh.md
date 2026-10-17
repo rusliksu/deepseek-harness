@@ -83,6 +83,8 @@ kind: "package-reference"
 
 子级在继承或独立选择的 preset 之下拥有自身注册作用域，不导入父方的 Agent 局部工具限制。后端在其他启动时能力之外声明 `agentPreset` 和 `agentOptions`，由 subagent manager 在创建子级时应用。
 
+Spawn 在子 agent 启动期间持有父 Agent 的操作准入。为迁移预留的父 agent 无法启动新的进程内子 agent；仍驻留且有归属的子 agent 也会阻止替换父实例。
+
 </details>
 
 -----

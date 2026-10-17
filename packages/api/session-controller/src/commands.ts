@@ -112,6 +112,8 @@ export class SessionCommandController {
     if (request.workspaceId !== undefined && request.cwd !== undefined) {
       throw new RemoteError('gateway/bad-request', 'session.create accepts workspaceId or cwd, not both', {})
     }
+    using _admission = request.sessionId === undefined ? undefined
+      : this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     let workspace: Workspace | undefined
     if (request.workspaceId !== undefined) {
       workspace = this.ctx.workspaceRegistry.get(request.workspaceId)
@@ -155,8 +157,9 @@ export class SessionCommandController {
    * @returns the normalized selection installed for the Session, without waiting for default persistence.
    */
   async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     const agent = await this.resolveAgent(request.sessionId)
-    return this.agents.serializeImageAdmission(agent, async () => {
+    return await this.agents.serializeImageAdmission(agent, async () => {
       try {
         await this.requireModel(request)
         const resolved = await this.ctx.llm.resolveCallConfig({
@@ -197,6 +200,7 @@ export class SessionCommandController {
    * @returns the accepted title and durable event sequence.
    */
   async rename(request: SessionRenameRequest): Promise<SessionRenameValue> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     const agent = await this.resolveAgent(request.sessionId)
     const titles = this.ctx.get('sessionTitle')
     if (titles === undefined) {
@@ -225,6 +229,7 @@ export class SessionCommandController {
    * @returns the new Session identity.
    */
   async fork(request: SessionForkRequest): Promise<SessionForkValue> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     let atSeq: ReturnType<typeof SessionSeq> | undefined
     try {
       atSeq = request.atSeq === undefined ? undefined : SessionSeq(request.atSeq)
@@ -317,6 +322,7 @@ export class SessionCommandController {
    * @returns acknowledgement that the Agent accepted the prompt.
    */
   async prompt(request: SessionPromptRequest, source: MessageSource): Promise<SessionPromptValue> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     const agent = await this.resolveAgent(request.sessionId)
     if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
     const hasImage = request.content.some(part => part.type === 'image')
@@ -359,7 +365,7 @@ export class SessionCommandController {
       }
       return { accepted: true }
     }
-    return hasImage ? this.agents.serializeImageAdmission(agent, admit) : admit()
+    return hasImage ? await this.agents.serializeImageAdmission(agent, admit) : await admit()
   }
 
   private async requireModel(selection: Pick<AgentModelSelection, 'provider' | 'model'>): Promise<void> {
@@ -416,6 +422,7 @@ export class SessionCommandController {
    * @returns acknowledgement that the queue mutation was applied.
    */
   async updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
     if (request.action.kind === 'edit') {
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- Remote callers can submit untyped JSON.
       if (request.action.content.some(block => block.type !== 'text')) {

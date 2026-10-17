@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { collectSlotEntries, oversizedSlotReports, resolveSlotEntries, validateSlotContracts } from './gen-client-catalog.ts'
+import ts from 'typescript'
+import { collectSlotEntries, oversizedSlotReports, renderClientCatalog, resolveSlotEntries, validateSlotContracts } from './gen-client-catalog.ts'
 import type { SlotDeclaration, SlotRegistration, TypeDeclaration } from './slot-walk.ts'
 
 /** A declaration with every field the catalog needs, overridable per case. */
@@ -261,4 +262,17 @@ describe('the real workspace surface', () => {
     expect(tool.ownerPropsReferences).not.toContain('ToolCallCommonProps')
     expect(tool.ownerPropsReferences).not.toContain('ToolCallPhaseProps')
   })
+})
+
+
+it('renders Windows declaration line endings as valid TypeScript string literals', () => {
+  const ownerTypes = new Map([...OWNER_TYPES].map(([key, value]) => [key, {
+    ...value, text: value.text.replaceAll('\n', '\r\n'),
+  }]))
+  const entries = resolveSlotEntries([declaration({ ownerType: 'DemoOwnerProps' })], [registration()], ownerTypes, new Map())
+  const rendered = renderClientCatalog(entries)
+  const parsed = ts.transpileModule(rendered, { reportDiagnostics: true })
+  expect(parsed.diagnostics).toEqual([])
+  expect(rendered).not.toContain('\r')
+  expect(rendered).toContain('width: number\\n')
 })

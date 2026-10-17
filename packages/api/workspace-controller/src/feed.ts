@@ -61,6 +61,10 @@ export class WorkspaceFeed {
     this.order = baseline.map(workspace => String(workspace.id))
     this.archived = ctx.workspaceRegistry.archivedSessionIds.map(String)
     this.pinned = ctx.workspaceRegistry.pinnedSessionIds.map(String)
+    ctx.on('workspace/session-relocated', () => {
+      this.knownIds = new Set(ctx.workspaceRegistry.list().map(workspace => String(workspace.id)))
+      for (const follower of this.followers) follower.push({ type: 'baseline', value: this.baseline() })
+    })
     ctx.on('domain/changed', (change: DomainChanged) => { this.changed(change) })
     ctx.effect(() => () => {
       for (const follower of this.followers) follower.close()
@@ -99,7 +103,7 @@ export class WorkspaceFeed {
   }
 
   private changed(change: DomainChanged): void {
-    if (change.domain !== 'workspace') return
+    if (change.domain !== 'workspace' || this.ctx.workspaceRegistry.relocationPending) return
     if (change.table === '') {
       if (change.operation !== 'put') return
       const state = workspaceDomainState.parse(change.value)
