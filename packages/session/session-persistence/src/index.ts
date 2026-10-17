@@ -10,6 +10,8 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionHandle, SessionAccess } from './handle.ts'
 import type { SessionPersistenceRevision } from './revision.ts'
+import type { SessionRelocationOptions, SessionRelocationRequest, SessionRelocationTransaction } from './relocation.ts'
+export type { SessionRelocationOptions, SessionRelocationRequest, SessionRelocationResult, SessionRelocationTransaction } from './relocation.ts'
 
 // Re-export the metadata vocabulary so Consumers import it from the Service Definition.
 export type { SessionHeader } from '@deepseek-ai/dsh-session'
@@ -135,11 +137,24 @@ declare module '@deepseek-ai/cordis' {
  * on this backend instance observe at least that prefix.
  */
 export abstract class SessionPersistence extends Service {
+  /** Whether this provider implements exclusive working-directory transactions. */
+  readonly supportsRelocation: boolean = false
   /** Process-local instance identity, stable through Context proxies and distinct after service replacement. */
   readonly identity: symbol = Symbol('sessionPersistence')
 
   constructor(ctx: Context) {
     super(ctx, 'sessionPersistence')
+  }
+
+  /**
+   * Prepare a directory change while retaining the session's exclusive write lease.
+   * The consumer reconciles related state, commits, and closes in a finally block.
+   * @param _request - caller identity and exact expected observation.
+   * @param _options - optional live write ownership retained through teardown.
+   * @returns a transaction that retains ownership through commit or rollback.
+   */
+  beginRelocation(_request: SessionRelocationRequest, _options?: SessionRelocationOptions): Promise<SessionRelocationTransaction> {
+    return Promise.reject(Object.assign(new Error('session relocation unsupported'), { code: 'session/relocate-unsupported' }))
   }
 
   /**

@@ -20,6 +20,39 @@ function scheduleEvent(data: unknown, seq: number): SessionEvent {
 }
 
 describe('shared Schedule management', () => {
+  it('rejects reminder creation before its durable write while relocation owns admission', async () => {
+    const { ctx, service } = await setup()
+    ctx.on('agent/admit-operation', () => { throw new Error('relocation owns this session') })
+    await expect(service.create(SessionId('moving'), { prompt: 'Later', after_seconds: 60, title: 'Later' }))
+      .rejects.toThrow('relocation owns this session')
+    expect(await service.catalog()).toEqual([])
+  })
+
+  it('holds ordinary admission through a delayed reminder write', async () => {
+    vi.useRealTimers()
+    const pool = new MemoryMediaPool()
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    let admissions = 0
+    const test = await harness({ pool, backend: gatedScheduleBackend(pool, {
+      putRecord: async () => { entered.resolve(undefined); await release.promise },
+    }) })
+    tests.push(test)
+    test.ctx.on('agent/admit-operation', () => {
+      admissions += 1
+      return { [Symbol.dispose]: () => { admissions -= 1 } }
+    })
+    const writing = test.service.create(SessionId('moving'), { prompt: 'Later', after_seconds: 60, title: 'Later' })
+    try {
+      await entered.promise
+      expect(admissions).toBe(1)
+    } finally {
+      release.resolve(undefined)
+      await writing
+    }
+    expect(admissions).toBe(0)
+  })
+
   it('initializes a new task with empty known delivery history', async () => {
     const { service, pool } = await setup()
     const sessionId = SessionId('new-history')

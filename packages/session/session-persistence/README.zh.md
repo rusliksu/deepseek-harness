@@ -48,6 +48,15 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 
 每一次日志读写都流经返回的 `SessionHandle`；不存在按 id 寻址的 append 或 load 方法。`handle.read(offset?, length?)` 返回 `{ eventState, events }`：外层 slice 属于调用方，`eventState` 则区分由调用方独占的 `detached` 事件图与可能同时位于后端缓存中的 `shared-frozen` 事件图。该状态由生成方确定，即使切片为空也会保留。两种状态都能直接接管而无需复制；需要可变事件的消费方必须先克隆事件。读取绝不包含撕裂尾部，同一句柄上的重复读取绝不会观察到比先前读取更旧的状态，写句柄也能读到自己成功的 append。`handle.append(events)` 追加一个连续批次，其第一个 `seq` 等于已存储 next-seq；完成时的持久化是尽力而为的——批次被接受、有序，并对同一后端实例上的读取可见，只有完成的 `flush` 才承诺它在崩溃后依然存在（交付的 JSONL 后端恰好会立即持久化每个批次）。`handle.flush()` 是持久性屏障，同时把空的已创建会话实体化，使其可被持久列出。`handle.close()` 幂等且不可取消：读句柄释放本地资源；写句柄完成待处理的持久化并释放写所有权。一旦某次 `append` 或 `flush` 完成，其后在同一后端实例上开始的读取——无论经由任何句柄，还是经由 `stat`/`list`——至少能观察到该前缀。
 
+<a id="working-directory-relocation"></a>
+### 工作目录迁移
+
+后端实现 `beginRelocation(request)` 时，通过 `supportsRelocation` 声明支持。默认后端约定拒绝不受支持的迁移。请求使用 UUID 操作标识与精确观察到的目录和 revision。返回的事务在提交或回滚期间持有排他会话所有权，直到调用 `close()`；调用方在 `finally` 块中关闭事务。重复提交的同一请求返回其原结果。[JSONL 后端](../session-persistence-jsonl/README.zh.md#working-directory-transactions)说明格式、大小、恢复和物理位置规则。
+
+向 `beginRelocation` 传入 `{ writer }`，可在代理完成清理期间保留该句柄的内核租约。关闭旧句柄后，使用 `openWriter()` 为已提交或已恢复的目录取得句柄，并在验证后调用 `complete(writer)` 转交永久所有权。在完成前，关闭借用句柄会将所有权归还给事务以便回滚。若尚未开始清理，关闭已放弃的准备事务仍会保留原始句柄可用；已退役 Session 的事件不能到达替代写入句柄。
+
+可选的 `complete(writer, commitRelated)` 回调在写入方最终排空与刷写之后、内核租约转交之前提交关联持久记录。回调失败会保留事务所有权，调用方可关闭借用句柄后回滚。崩溃后重新打开的已提交操作仅在仍拥有当前放置修订号时，才能恢复其原始放置位置。
+
 ### 所有权与可见性
 
 `create` 与 `open(id, 'write')` 取得进程内单写者所有权：在持有者活跃期间第二次以写模式打开会以 `SessionAlreadyOwnedError` 拒绝，对已占用 id 执行 `create` 会以 `SessionAlreadyExistsError` 拒绝，在 `read` 句柄上执行修改会以 `SessionReadOnlyError` 拒绝——一种句柄类型，运行时拒绝。对已关闭句柄的任何操作会以 `SessionHandleClosedError` 拒绝，`SessionOwnershipLostError` 标记写所有权已永久丢失的写句柄（关闭并重新打开）。已创建的会话自 `create` 完成之刻起即可在本进程内被观察到，而后端可以把物理实体化推迟到第一次 `append` 或 `flush`；其他进程只能看到已实体化的会话，一个在崩溃前从未实体化的会话等于从未存在。
@@ -69,6 +78,7 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 -----
 
 <a id="understand-the-implementation"></a>
+
 ## 理解实现
 
 <details>

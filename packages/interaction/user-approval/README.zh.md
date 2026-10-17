@@ -84,6 +84,8 @@ kind: "package-reference"
 
 `request()` 先追加携带请求身份与工具的 `approval/asked`，再追加携带最终结果的 `approval/decided`；确切追加字段见 [`src/index.ts`](src/index.ts)。两者都只写入日志。
 
+更改活跃 Agent 策略时，在追加策略事件或排入通知之前获取操作准入。此执行器无法向已为迁移预留的实例写入策略更改。
+
 </details>
 
 -----

@@ -813,6 +813,10 @@ interface PluginRecord {
 
 可选的 `application` 指定文件关联应用，不修改系统默认值；`workspacePathApplications({ path })` 在校验 Host 路径后返回当前关联应用、名称、图标和默认项。
 
+## 历史目录元数据
+
+`SessionPage` 与初始 `SessionFollowFrame` 可携带 `directoryContexts`。Client 将这些区间与历史窗口一起发布到 `SessionSnapshot`；迁移后，流重新打开并接收替换基线。区间使用 [Workspace 事件目录](workspace.zh.md#history-directory-contexts)，不修改 Session 事件。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -867,6 +871,22 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
  * @returns the created or reused Session identity and its preset when configured.
  */
 @Remote('create') create(request: SessionCreateRequest): Promise<SessionCreateValue>
+
+/**
+ * Observe relocation support and the exact persisted revision without resuming a chat.
+ * @param request - existing ordinary Session identity.
+ * @param signal - cancellation for the header observation.
+ * @returns support and the current directory/revision when the Session exists.
+ */
+@Remote({ name: 'relocationInfo', resources: { session: (request: { readonly sessionId: SessionId }) => request.sessionId } }) async relocationInfo(request: { readonly sessionId: SessionId }, signal: AbortSignal): Promise<SessionRelocationInfo>
+
+/**
+ * Move one idle chat to an existing registered local project without moving its files.
+ * @param request - destination, exact source observation, and stable operation UUID.
+ * @param signal - caller cancellation before durable work is admitted.
+ * @returns the verified same-ID chat and final persisted revision.
+ */
+@Remote({ name: 'relocate', resources: { session: (request: SessionRelocateRequest) => request.sessionId, workspace: (request: SessionRelocateRequest) => request.targetWorkspaceId } }) async relocate(request: SessionRelocateRequest, signal: AbortSignal): Promise<SessionRelocateValue>
 
 /**
  * Select one Session-local model after explicitly resuming the Session; save the default in the background.

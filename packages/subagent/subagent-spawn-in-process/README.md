@@ -83,6 +83,8 @@ This backend registers the provider and prepares a fresh child session. `dsh-sub
 
 The child has its own registration scope below the inherited or independently selected preset. The parent's agent-local tool restrictions are not imported. The backend advertises `agentPreset` and `agentOptions` alongside its other start-time capabilities; the subagent manager applies them during child creation.
 
+Spawn holds its parent Agent operation admission through child startup. A parent reserved for relocation cannot start a new in-process child; resident owned children also prevent replacement of their parent incarnation.
+
 </details>
 
 -----

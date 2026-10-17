@@ -446,6 +446,7 @@ export class SessionManager {
           for (const s of this.summaries) {
             const session = this.sessions.get(s.sessionId)
             if (session === undefined) continue
+            session.handleAdded()
             session.handleBlank(this.effectiveBlank(s))
             session.handleRunning(s.running)
           }
@@ -667,6 +668,7 @@ export class SessionManager {
   handleSessionAdded(summary: SessionSummary): void {
     this.mergeSummary(summary)
     if (!this.disposed && summary.running) this.engagedSessions.add(summary.sessionId)
+    if (!this.disposed) this.sessions.get(summary.sessionId)?.handleAdded()
     this.sessions.get(summary.sessionId)?.handleBlank(this.effectiveBlank(summary))
     if (summary.projections !== undefined) this.applyListBlock(summary.sessionId, summary.projections)
   }

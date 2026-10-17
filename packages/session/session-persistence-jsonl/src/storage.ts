@@ -29,8 +29,15 @@ import type {
   SessionHandleFlushOptions,
   SessionHandleReadOptions,
   SessionHandleReadResult,
+  SessionRelocationTransaction,
 } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionWriteLease } from './lease.ts'
+
+/** One release capability; a relocation transaction retains the underlying kernel lease. */
+export interface JsonlWriteOwnership {
+  /** Return ownership to the current lifecycle owner. */
+  release(): Promise<void>
+}
 
 /** Maximum intentional wait before a routed live session batch starts writing. */
 export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200
@@ -100,8 +107,39 @@ export class JsonlSessionHandle implements SessionHandle {
     readonly access: SessionAccess,
     private readonly state: StorageHandleState,
     /** The cross-process write lock; a create handle acquires it lazily at first materialization. */
-    private lease?: SessionWriteLease,
+    private lease?: JsonlWriteOwnership,
   ) {}
+
+  private lending = false
+
+  /** Retain this handle's kernel lease while its agent finishes teardown.
+   * @param returned - called when close finishes draining, without releasing the kernel lease.
+   * @returns the retained ownership and cancellation before teardown starts.
+   */
+  lendOwnership(returned: () => void): { lease: JsonlWriteOwnership; cancel(): boolean } {
+    this.assertOpen('relocate')
+    if (this.access !== 'write' || this.lease === undefined || this.lending) throw new SessionAlreadyOwnedError(this.id)
+    const lease = this.lease
+    const borrowed = { release: (): Promise<void> => { returned(); return Promise.resolve() } }
+    this.lending = true
+    this.lease = borrowed
+    return { lease, cancel: () => {
+      if (this.closing !== undefined) return false
+      this.lease = lease
+      this.lending = false
+      return true
+    } }
+  }
+
+  /** Replace a transaction's borrowed capability with permanent ownership.
+   * @param expected - the exact currently borrowed release capability.
+   * @param owned - the retained kernel lease.
+   */
+  acceptOwnership(expected: JsonlWriteOwnership, owned: JsonlWriteOwnership): void {
+    this.assertOpen('relocate')
+    if (this.lease !== expected) throw new SessionAlreadyOwnedError(this.id)
+    this.lease = owned
+  }
 
   /** Exact fork-inherited prefix length stored with this session's log. */
   get inheritedEventCount(): SessionLogOffset {
@@ -391,9 +429,14 @@ export interface PendingSession {
 export class JsonlBackendTracker {
   /** Every open handle; teardown closes what remains. */
   readonly openHandles = new Set<SessionHandle>()
+  private readonly relocations = new Set<Promise<SessionRelocationTransaction>>()
+  private unloading = false
   /** `null` marks a claim whose handle is still being constructed. */
   private readonly writers = new Map<SessionId, JsonlSessionHandle | null>()
   private readonly pending = new Map<SessionId, PendingSession>()
+  private readonly liveSessions = new Map<SessionId, Session>()
+  private readonly routes = new WeakMap<Session, JsonlSessionHandle>()
+  private readonly retired = new WeakSet<Session>()
   private counter = 0
 
   /** @param name - backend label used in in-memory revision tokens and teardown errors. */
@@ -429,6 +472,24 @@ export class JsonlBackendTracker {
   claimWrite(id: SessionId): void {
     if (this.writers.has(id)) throw new SessionAlreadyOwnedError(id)
     this.writers.set(id, null)
+  }
+
+  /** Check the exact current writer before accepting a live relocation.
+   * @param handle - the caller's proposed owner.
+   * @returns whether this backend owns that precise write handle.
+   */
+  ownsWriter(handle: SessionHandle): handle is JsonlSessionHandle {
+    return this.writers.get(handle.id) === handle
+  }
+
+  /** Keep a transaction's claim after its old or borrowed handle closes.
+   * @param handle - the precise handle returning ownership.
+   */
+  retainClaim(handle: JsonlSessionHandle): void {
+    if (this.writers.get(handle.id) !== handle) throw new SessionAlreadyOwnedError(handle.id)
+    this.writers.set(handle.id, null)
+    const session = this.liveSessions.get(handle.id)
+    if (session !== undefined && this.routes.get(session) === handle) this.retired.add(session)
   }
 
   /**
@@ -481,7 +542,11 @@ export class JsonlBackendTracker {
    */
   adopt(handle: JsonlSessionHandle): JsonlSessionHandle {
     this.openHandles.add(handle)
-    if (handle.access === 'write') this.writers.set(handle.id, handle)
+    if (handle.access === 'write') {
+      this.writers.set(handle.id, handle)
+      const session = this.liveSessions.get(handle.id)
+      if (session !== undefined && !this.retired.has(session)) this.routes.set(session, handle)
+    }
     return handle
   }
 
@@ -495,8 +560,26 @@ export class JsonlBackendTracker {
   release(handle: JsonlSessionHandle, materialized: boolean): void {
     this.openHandles.delete(handle)
     if (handle.access !== 'write') return
+    if (this.writers.get(handle.id) !== handle) return
     this.writers.delete(handle.id)
     if (!materialized) this.pending.delete(handle.id)
+  }
+
+  /** Admit preparation before it can acquire a lease, and retain it through close.
+   * @param id - the session whose preparation is admitted.
+   * @param prepare - construction under this backend's teardown ownership.
+   * @returns the transaction, tracked even while preparation awaits I/O.
+   */
+  runRelocation(id: SessionId, prepare: () => Promise<SessionRelocationTransaction>): Promise<SessionRelocationTransaction> {
+    if (this.unloading) return Promise.reject(new SessionHandleClosedError(id, 'relocate'))
+    const preparing = Promise.resolve().then(prepare).then((transaction) => {
+      return { ...transaction, close: () => transaction.close().finally(() => { this.relocations.delete(preparing) }) }
+    }, (error: unknown) => {
+      this.relocations.delete(preparing)
+      throw error
+    })
+    this.relocations.add(preparing)
+    return preparing
   }
 
   /**
@@ -524,8 +607,8 @@ export class JsonlBackendTracker {
 
   /**
    * Install the backend's live session routing and teardown. Persistence
-   * enforces one active write handle per id, so the listeners route published
-   * sessions' events by id; the teardown effect closes every open handle —
+   * enforces one active write handle per id, so the listeners route each published
+   * Session incarnation to its exact writer; teardown settles relocations and closes every open handle —
    * close drains the routed buffer — and aggregates failures. This provider
    * owns no separate storage connection, so closing handles is the complete
    * teardown. The returned effect removes listeners before closing handles.
@@ -533,39 +616,59 @@ export class JsonlBackendTracker {
    * @returns the disposer to run after persistence consumers finish unloading.
    */
   install(ctx: Context): () => Promise<void> {
-    const { writers, openHandles, name } = this
+    const { openHandles, name, writers, retired, liveSessions, routes, relocations } = this
+    const beginUnload = (): void => { this.unloading = true }
     return ctx.effect(function* () {
       yield async () => {
         const errors: unknown[] = []
+        beginUnload()
+        for (const preparing of [...relocations]) {
+          try { await (await preparing).close() } catch (error: unknown) { errors.push(error) }
+        }
         for (const handle of [...openHandles]) {
-          try {
-            await handle.close()
-          } catch (error: unknown) {
-            errors.push(error)
-          }
+          try { await handle.close() } catch (error: unknown) { errors.push(error) }
         }
         if (errors.length > 0) throw new AggregateError(errors, `${name} dispose failed`)
       }
+      yield ctx.on('session/created', (session: Session) => {
+        if (retired.has(session)) return
+        liveSessions.set(session.id, session)
+        const writer = writers.get(session.id)
+        if (writer !== null && writer !== undefined) routes.set(session, writer)
+      })
+      const route = (session: Session): JsonlSessionHandle | undefined => {
+        if (retired.has(session)) return undefined
+        const writer = writers.get(session.id)
+        if (writer === null || writer === undefined) return undefined
+        const bound = routes.get(session)
+        if (bound !== undefined) return bound === writer ? writer : undefined
+        const current = liveSessions.get(session.id)
+        if (current !== undefined && current !== session) return undefined
+        liveSessions.set(session.id, session)
+        routes.set(session, writer)
+        return writer
+      }
       yield ctx.on('session/event', (session: Session, event) => {
-        writers.get(session.id)?.enqueueLive(event, (error) => {
+        route(session)?.enqueueLive(event, (error) => {
           ctx.logger.warn(`session-persistence: background write for session "${session.id}" failed (buffered events retained): ${String(error)}`)
         })
       })
       yield ctx.on('session/flush', (session: Session) => {
-        const writer = writers.get(session.id)
-        if (writer === null || writer === undefined) return undefined
+        const writer = route(session)
+        if (writer === undefined) return undefined
         return (async () => {
           await writer.drainLive()
           await writer.flush()
         })()
       })
       yield ctx.on('session/disposed', (session: Session) => {
-        const writer = writers.get(session.id)
-        if (writer === null || writer === undefined) return
+        const writer = route(session)
+        if (liveSessions.get(session.id) === session) liveSessions.delete(session.id)
+        if (writer === undefined) return
         writer.close().catch((error: unknown) => {
           ctx.logger.warn(`session-persistence: final drain for session "${session.id}" failed: ${String(error)}`)
         })
       })
-    }, `${this.name} live routing and open handles`)
+    })
   }
 }

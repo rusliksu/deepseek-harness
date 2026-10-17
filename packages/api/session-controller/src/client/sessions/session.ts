@@ -97,6 +97,7 @@ export class Session implements SessionFace {
   // ---- Window and derived state (all private; the snapshot is the only read API) ----
   private baseSeq = SessionLogOffset(0)
   private hasMore = false
+  private directoryContexts: SessionSnapshot['directoryContexts']
   private openState: OpenState = 'cold'
   private openError: RemoteFailure | null = null
   private openPromise: Promise<void> | null = null
@@ -485,10 +486,11 @@ export class Session implements SessionFace {
    *  reconnecting control stream and remains untouched. */
   async resync(): Promise<void> {
     if (this.openState === 'cold') return // never opened: no window to rebuild (doOpen flips to 'loading' synchronously, so cold implies no in-flight open)
-    this.openGeneration++
+    const generation = ++this.openGeneration
     const events = this.events
     this.events = undefined
     await events?.dispose()
+    if (generation !== this.openGeneration) return
     this.openPromise = null
     this.openState = 'cold'
     this.openError = null
@@ -577,6 +579,21 @@ export class Session implements SessionFace {
     this.notifier.markDirty()
   }
 
+  /** Restore the same retained Client identity after the Host publishes its replacement. */
+  handleAdded(): void {
+    if (!this.removed) return
+    this.removed = false
+    this.notifier.markDirty()
+    const refresh = this.resync()
+    const generation = this.openGeneration
+    void refresh.catch((error: unknown) => {
+      if (generation !== this.openGeneration) return
+      this.openState = 'error'
+      this.openError = new RemoteError('gateway/internal', 'Session history refresh failed', {}, { cause: error })
+      this.notifier.markDirty()
+    })
+  }
+
   /** `api-session/removed` relay: flag the snapshot while retaining the resident instance. */
   handleRemoved(): void {
     this.removed = true
@@ -651,6 +668,7 @@ export class Session implements SessionFace {
           change.hasMore,
           change.page.projections === undefined ? undefined : projectionsBaseline(change.page.projections),
           change.page.assistantStream,
+          change.page.directoryContexts,
         )
         return
       case 'prepend':
@@ -670,6 +688,7 @@ export class Session implements SessionFace {
     hasMore: boolean,
     projections?: ProjectionsBaseline,
     assistantStream?: SessionAssistantStreamBaseline,
+    directoryContexts?: SessionSnapshot['directoryContexts'],
   ): void {
     // A durable gap-repair page has no assistant baseline. Clearing transient
     // attempts makes a held notification reopen follow once for an atomic
@@ -677,6 +696,7 @@ export class Session implements SessionFace {
     const visible = this.assistantStream.replace(entries, assistantStream)
     this.baseSeq = SessionLogOffset(entries[0]?.event.seq ?? 0)
     this.hasMore = hasMore
+    if (directoryContexts !== undefined) this.directoryContexts = directoryContexts
     if (this.pendingHistory !== null) {
       this.pendingHistory.beforeSeq = this.baseSeq
       this.pendingHistory.hasMore = hasMore
@@ -889,6 +909,7 @@ export class Session implements SessionFace {
     const identity = this.projections.values().subagent
     return {
       sessionId: this.sessionId,
+      ...this.directoryContexts === undefined ? {} : { directoryContexts: this.directoryContexts },
       pendingSubmissions: this.pendingSubmissions,
       running: this.running,
       subagent: this.address === undefined

@@ -3,8 +3,11 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/client/ui-chat/README.md
 /:
-  en: d88f75fc0178ba53
-  zh: 52bc7ae9551ab1cf
+  en: cb3f91d54eee30e5
+  zh: cb3f91d54eee30e5
+/description-browser-chat-target-that-renders-session-conversation-nodes-historical-images-actions-localization-and-scroll-state-kind-package-reference:
+  en: b517ea86c575679d
+  zh: 4b0f2707356814cf
 /deepseek-ai-dsh-client-ui-chat:
   en: 02bd72c12ada3218
   zh: 331b3a38b3ddfc6e
@@ -12,11 +15,11 @@
   en: fba5b2fb8080e2dd
   zh: 32c337123b7dfbcb
 /deepseek-ai-dsh-client-ui-chat/table-of-contents:
-  en: 41cd21266011d571
-  zh: 3172d1a2acbb27b7
+  en: 5c0fa29d01cfdc1c
+  zh: 27be8e5d4ca8f4a4
 /deepseek-ai-dsh-client-ui-chat/reference-previews:
-  en: aa6b1abec265bf1b
-  zh: 7260ce78afba2584
+  en: 416f0657a0eda140
+  zh: f9e17d6074918bc3
 /deepseek-ai-dsh-client-ui-chat/hidden-chat-rows:
   en: cbf1f0a2205046a5
   zh: 2e59d0815351349f
@@ -36,8 +39,8 @@
   en: 81d7ca7595c34d39
   zh: 29eb8248c75e9ea6
 /deepseek-ai-dsh-client-ui-chat/scroll-ownership:
-  en: 284737900cb75668
-  zh: 12e0844082ff79ce
+  en: 59ff7495bb914f70
+  zh: 51d75adfecd68cee
 /deepseek-ai-dsh-client-ui-chat/model-experience:
   en: c17b4dd43a61c569
   zh: f7414309810c3a08
@@ -45,8 +48,8 @@
   en: 15a7151ff9268f15
   zh: 6eae68c718be579b
 /deepseek-ai-dsh-client-ui-chat/known-limitations-and-deferred-work:
-  en: 811787a5d2feaa90
-  zh: 3f1697bbc1fc7691
+  en: 6fbd6b11662e6db0
+  zh: 3eeda1a7e48953e3
 /deepseek-ai-dsh-client-ui-chat/known-limitations-and-deferred-work/dev-note:
-  en: e67f633dc6fe7773
-  zh: e88aeb617ffb74ea
+  en: 34651d247c0d1bba
+  zh: 86522cb525d85ef7

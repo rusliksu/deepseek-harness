@@ -54,6 +54,8 @@ Host 插件提供 `ctx.fileUploads`。它拥有经过认证的流式路由、编
 | [`src/client/runtime.ts`](src/client/runtime.ts) | 专用 Worker 与页面自有载体实现 |
 | [`src/client/index.ts`](src/client/index.ts) | Client 插件注册与 `ctx.fileUpload` 声明 |
 
+上传在存储与回执注册期间持有原生操作准入。暂存回执属于确切的活跃会话实例，因此草稿仍引用暂存文件时，迁移会拒绝拆卸；该草稿仍可使用回执与字节内容。
+
 </details>
 
 每个上传凭证只属于一个准确的 Session，每个请求只使用一个已选定载体。载体不支持的 stream 会在发送请求体前失败。

@@ -126,6 +126,8 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 | [`tests/public-url.spec.ts`](tests/public-url.spec.ts) | Advertised-root parsing and normalization |
 | [`tests/browser-open.spec.ts`](tests/browser-open.spec.ts) | Default-browser handoff after the page is reachable |
 
+The Agent-loop Loader row injects `workspaceRegistry`, so unfinished relocation recovery completes before a configured agent can open the affected identity.
+
 </details>
 
 -----

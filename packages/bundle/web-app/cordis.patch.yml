@@ -14,6 +14,10 @@
 
 # ── surface-specific values the base deliberately omits ─────────────────────
 
+# Workspace recovery settles before configured agents acquire their writers.
+- id: agent-loop
+  inject: [workspaceRegistry]
+
 - id: system-prompt
   config:
     personaPrefix: >-

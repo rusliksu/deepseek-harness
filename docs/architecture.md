@@ -76,6 +76,8 @@ AgentLoop awaits serial `agent/created` before queued work and rolls back failed
 
 The [event map](event-producer-consumer.md) lists every event's producers and consumers.
 
+Workspace journals exclusive relocations; startup awaits recovery.
+
 ## Turn flow
 
 A **step** is one model request plus the tools it calls. A **turn** is zero or more steps: it opens before its first input is claimed and closes once nothing is owed.

@@ -199,6 +199,7 @@ export class SessionEventStream extends RemoteJournalStream<
             hasMore: frame.hasMore,
             projections: frame.projections,
             assistantStream: frame.assistantStream,
+            ...frame.directoryContexts === undefined ? {} : { directoryContexts: frame.directoryContexts },
           },
         }
         continue

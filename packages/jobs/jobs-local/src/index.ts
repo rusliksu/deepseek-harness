@@ -206,6 +206,8 @@ export class LocalJobRegistry extends JobRegistry {
 
   start(spec: JobSpec): JobId {
     const owner = this.resolveOwner(spec.owner)
+    using _admission = owner === undefined ? undefined
+      : this.selfCtx.bail('agent/admit-operation', { sessionId: owner.id, agent: owner })
     if (!this.servesOwner(owner)) {
       throw new Error('background jobs unavailable: no job controller serves this agent (load @deepseek-ai/dsh-tool-jobs in its composition)')
     }

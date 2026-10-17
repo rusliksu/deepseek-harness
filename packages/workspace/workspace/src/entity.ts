@@ -14,17 +14,7 @@ import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { WorkspaceRecord } from './spec.ts'
 import type { Workspace, WorkspaceId } from './types.ts'
 import { realpathNormalize } from './paths.ts'
-
-/** An insertSessionBefore request named a session or anchor not on the account (storage failures stay plain errors). */
-export class WorkspaceMoveInvalidError extends Error {
-  /**
-   * @param message - Which id was unaccounted and where.
-   */
-  constructor(message: string) {
-    super(message)
-    this.name = 'WorkspaceMoveInvalidError'
-  }
-}
+import { WorkspaceMoveInvalidError } from './errors.ts'
 
 /**
  * The registry-owned machinery an entity mutates through. Entities never see
@@ -32,6 +22,11 @@ export class WorkspaceMoveInvalidError extends Error {
  * index backing the `sessionIds` projection, and attach-time header reads.
  */
 export interface WorkspaceEntityHost {
+  /** Serialize the complete validation and mutation with registry operations.
+   * @param operation - entity validation and durable update.
+   * @returns its settled result at the registry queue slot.
+   */
+  enqueue<T>(operation: () => Promise<T>): Promise<T>
   /**
    * Resolve the open `workspaces` table.
    * @returns the table; throws while the registry has not started yet.
@@ -108,45 +103,47 @@ export class WorkspaceEntity implements Workspace {
   }
 
   async attachSession(sessionId: SessionId): Promise<void> {
+    return this.host.enqueue(async () => {
     // Validation is skipped when the settled snapshot already accounts the
     // id: the cwd fact was checked when it first attached and both inputs
     // (stored header cwd, workspace path) are immutable. Membership itself is
     // decided on the write chain inside `mutate`, never on this snapshot.
-    if (!this.record.sessionIds.includes(sessionId)) {
-      const header = await this.host.readSessionHeader(sessionId)
-      if (header.cwd === undefined) {
-        throw new Error(
-          `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
+      if (!this.record.sessionIds.includes(sessionId)) {
+        const header = await this.host.readSessionHeader(sessionId)
+        if (header.cwd === undefined) {
+          throw new Error(
+            `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
           + 'its stored header carries no cwd to validate against',
-        )
-      }
-      let cwd: string
-      try {
-        cwd = await realpathNormalize(header.cwd)
-      } catch (error) {
-        throw new Error(
-          `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
+          )
+        }
+        let cwd: string
+        try {
+          cwd = await realpathNormalize(header.cwd)
+        } catch (error) {
+          throw new Error(
+            `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
           + `its cwd '${header.cwd}' does not resolve, so it cannot be validated`,
-          { cause: error },
-        )
-      }
-      if (!(await stat(cwd)).isDirectory()) {
-        throw new Error(
-          `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
+            { cause: error },
+          )
+        }
+        if (!(await stat(cwd)).isDirectory()) {
+          throw new Error(
+            `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
           + `its cwd '${header.cwd}' is not a directory`,
-        )
-      }
-      if (cwd !== this.record.path) {
-        throw new Error(
-          `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
+          )
+        }
+        if (cwd !== this.record.path) {
+          throw new Error(
+            `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
           + `its cwd resolves to '${cwd}'`,
-        )
+          )
+        }
+        this.host.rememberSessionPath(sessionId, cwd)
       }
-      this.host.rememberSessionPath(sessionId, cwd)
-    }
-    await this.mutate(record => record.sessionIds.includes(sessionId)
-      ? record
-      : { ...record, sessionIds: [sessionId, ...record.sessionIds] })
+      await this.mutateRecord(record => record.sessionIds.includes(sessionId)
+        ? record
+        : { ...record, sessionIds: [sessionId, ...record.sessionIds] })
+    })
   }
 
   async insertSessionBefore(sessionId: SessionId, beforeSessionId?: SessionId): Promise<void> {
@@ -201,6 +198,17 @@ export class WorkspaceEntity implements Workspace {
    * rewrites the medium nor emits a change event.
    */
   private async mutate(fn: (record: WorkspaceRecord) => WorkspaceRecord): Promise<void> {
+    return this.host.enqueue(() => this.mutateRecord(fn))
+  }
+
+  /** Replace the published snapshot after one registry-owned multi-record operation.
+   * @param record - the committed record for this entity.
+   */
+  refresh(record: WorkspaceRecord): void {
+    this.record = record
+  }
+
+  private async mutateRecord(fn: (record: WorkspaceRecord) => WorkspaceRecord): Promise<void> {
     let next: WorkspaceRecord
     try {
       next = await this.host.table().update(this.id, (current) => {

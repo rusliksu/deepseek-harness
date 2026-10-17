@@ -170,6 +170,28 @@ interface SessionActivity {
 
 [`dsh-workspace-controller`](../../packages/api/workspace-controller) 经 `ctx.workspaceRegistry` 向 GUI 客户端提供工作区 CRUD，[`dsh-session-controller`](../../packages/api/session-controller) 执行上文「先建会话再 attach」的流程。[dsh-agent-instructions](../../packages/context/agent-instructions) 尽管名字如此，却**不是**消费方：它在 agent 自己的 cwd 下发现 AGENTS.md 风格的指令文件，从不触碰 `ctx.workspaceRegistry`——两者共用的这个词指的是用户的工作目录，而非本注册表的实体。
 
+<a id="history-directory-contexts"></a>
+## 事件目录
+
+`SessionDirectoryContext` 通过包含起点的事件偏移标识相对引用所用的目录。分叉会话复制继承区间；父会话后续迁移不会修改这些副本。
+
+```ts type-equiv
+/** Directory used to resolve relative references starting at one inclusive event offset. */
+interface SessionDirectoryContext {
+  readonly fromEvent: SessionLogOffset
+  readonly cwd: string
+}
+```
+
+```ts type-equiv
+/** Lifecycle-owned history observation used to preserve relative references without editing events. */
+interface SessionDirectoryObservation {
+  readonly header: SessionHeader
+  readonly inheritedEventCount: SessionLogOffset
+  readonly eventCount: SessionLogOffset
+}
+```
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -503,6 +525,29 @@ initializeDefault(resolveDirectory: () => Promise<string>): Promise<Workspace | 
 get(id: WorkspaceId): Workspace | undefined
 
 /**
+ * Test whether an identity must remain unavailable until global recovery.
+ * @param sessionId - identity about to accept ordinary work.
+ * @returns whether its durable relocation has no terminal outcome.
+ */
+hasPendingRelocation(sessionId: SessionId): boolean
+
+/**
+ * Capture a Session's directory history before publishing its lifecycle or showing relative references.
+ * Fork prefixes copy the parent's recorded contexts and remain independent afterwards.
+ * @param observation - current header, inherited cut and event count from the Session owner or reader.
+ * @returns immutable contexts, or undefined when older relocation metadata cannot establish them.
+ */
+async sessionDirectoryContexts(observation: SessionDirectoryObservation): Promise<readonly SessionDirectoryContext[] | undefined>
+
+/**
+ * Serialize workspace membership with the native lifecycle and durable recovery intent.
+ * @param request - observed source and registered target identity.
+ * @param apply - native lifecycle owner retaining admission and the physical write lease.
+ * @returns the durable, idempotent result after every owner has verified its state.
+ */
+relocateSession( request: WorkspaceSessionRelocationRequest, apply: (request: SessionRelocationRequest, callbacks: WorkspaceRelocationCallbacks) => Promise<SessionRelocationResult>, ): Promise<WorkspaceSessionRelocationResult>
+
+/**
  * Synchronous workspace projection in durable registry order. Every
  * entity's `sessionIds` getter is already filtered by the startup/live
  * canonical-cwd header index; this method performs no persistence reads.
@@ -589,7 +634,7 @@ unpinSession(sessionId: SessionId): Promise<void>
 async resolveByPath(path: string): Promise<Workspace | undefined>
 ```
 
-Types: [SessionId](core.zh.md)
+Types: [SessionId](core.zh.md) · [SessionRelocationRequest](persistence.zh.md) · [SessionRelocationResult](persistence.zh.md)
 
 Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
 
@@ -616,6 +661,25 @@ Ask the composed providers what still runs for a session before it is archived. 
  */
 'workspace/session-activity'( request: SessionActivityRequest, next: () => Promise<readonly SessionActivity[]>, ): Promise<readonly SessionActivity[]>
 ```
+
+Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
+
+<a id="workspacesession-relocated--emit"></a>
+
+#### `workspace/session-relocated` — emit
+
+Publish a complete workspace view after relocation settlement.
+
+```ts cordis-catalog
+/**
+ * Publish a complete workspace view after relocation settlement.
+ * @param request - identity whose membership and effective header settled.
+ * @mode emit
+ */
+'workspace/session-relocated'(request: { sessionId: SessionId }): void
+```
+
+Types: [SessionId](core.zh.md)
 
 Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
 

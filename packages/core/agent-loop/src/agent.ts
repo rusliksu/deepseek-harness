@@ -99,6 +99,7 @@ export class ReactLoopAgent implements Agent {
   readonly inbox: ReactLoopInbox
   private phase: Phase
   private activityDone: Promise<void> = Promise.resolve()
+  private retired = false
 
   /** The agent-scoped registration boundary; the lifecycle owner unwinds it after the driver exits. */
   readonly scope: Scope
@@ -129,7 +130,7 @@ export class ReactLoopAgent implements Agent {
     this.dispatch = agentEvents(loopCtx, this)
     this.scope = createScope(loopCtx, this)
     this.ctx = this.scope.ctx
-    this.inbox = new ReactLoopInbox(this.ctx.sessionProjections, session, this.dispatch)
+    this.inbox = new ReactLoopInbox(this.ctx.sessionProjections, session, this.dispatch, () => this.admit())
     /* v8 ignore next -- the loop registers its own turnBoundary unit, so the key is always present */
     const lastTurn = this.loopCtx.sessionProjections.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
     this.phase = { kind: 'idle', lastTurn }
@@ -139,6 +140,22 @@ export class ReactLoopAgent implements Agent {
 
   get status(): AgentStatus {
     return this.phase.kind === 'idle' || this.phase.kind === 'maintenance' ? 'idle' : 'running'
+  }
+
+  /** Whether lifecycle replacement can proceed without discarding accepted work. */
+  get quiescent(): boolean {
+    return this.phase.kind === 'idle' && !this.inbox.hasPending
+      && this.ctx.sessionProjections.stateOf(this.session, 'turnBoundary')?.openTurnStartSeq === null
+  }
+
+  /** Permanently reject new work on this exact incarnation during teardown. */
+  retire(): void {
+    this.retired = true
+  }
+
+  private admit(): Disposable | undefined {
+    if (this.retired) throw new Error(`agent "${this.id}" is retired`)
+    return this.loopCtx.bail('agent/admit-operation', { sessionId: this.id, agent: this })
   }
 
   /** Commit a phase and publish its externally visible status transition. */
@@ -152,6 +169,7 @@ export class ReactLoopAgent implements Agent {
   }
 
   send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
+    using _admission = this.admit()
     // Waking input cannot join an aborted activity, so it starts the next turn.
     // Captured before the insertion so a reentrant cancel from a splice observer cannot reclassify it.
     const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
@@ -181,26 +199,42 @@ export class ReactLoopAgent implements Agent {
   }
 
   runMaintenance<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    if (this.phase.kind !== 'idle') throw new Error(`agent "${this.id}" already has active work`)
-    const done = Promise.withResolvers<void>()
-    const maintenance: Phase = {
-      kind: 'maintenance',
-      abort: new AbortController(),
-      lastTurn: this.phase.lastTurn,
-      wakeRequested: false,
-    }
-    this.setPhase(maintenance)
-    this.activityDone = done.promise
-    return (async () => {
-      try {
-        return await job(maintenance.abort.signal)
-      } finally {
-        this.setPhase({ kind: 'idle', lastTurn: maintenance.lastTurn })
-        const cause = abortedCancelCause(maintenance.abort.signal)
-        if (cause?.kind !== 'disposed' && maintenance.wakeRequested && this.inbox.hasPending) this.wakeDriver()
-        done.resolve()
+    const admission = this.admit()
+    return this.maintain(job, admission)
+  }
+
+  /** @internal Factory-only initialization; public input still requires admission. */
+  initialize<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    return this.maintain(job)
+  }
+
+  private maintain<T>(job: (signal: AbortSignal) => Promise<T>, admission?: Disposable): Promise<T> {
+    try {
+      if (this.phase.kind !== 'idle') throw new Error(`agent "${this.id}" already has active work`)
+      const done = Promise.withResolvers<void>()
+      const maintenance: Phase = {
+        kind: 'maintenance',
+        abort: new AbortController(),
+        lastTurn: this.phase.lastTurn,
+        wakeRequested: false,
       }
-    })()
+      this.setPhase(maintenance)
+      this.activityDone = done.promise
+      return (async () => {
+        try {
+          return await job(maintenance.abort.signal)
+        } finally {
+          this.setPhase({ kind: 'idle', lastTurn: maintenance.lastTurn })
+          const cause = abortedCancelCause(maintenance.abort.signal)
+          if (cause?.kind !== 'disposed' && maintenance.wakeRequested && this.inbox.hasPending) this.wakeDriver()
+          done.resolve()
+          admission?.[Symbol.dispose]()
+        }
+      })()
+    } catch (error: unknown) {
+      admission?.[Symbol.dispose]()
+      throw error
+    }
   }
 
   /**

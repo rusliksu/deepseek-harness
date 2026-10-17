@@ -226,6 +226,7 @@ export class ScheduleService extends TypertRemoteService {
    * @returns The durably stored schedule. Cancellation does not roll back an in-flight write.
    */
   async create(sessionId: SessionId, request: ScheduleCreateRequest, signal?: AbortSignal): Promise<ScheduleRecord> {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: sessionId })
     if (Number(request.at !== undefined) + Number(request.after_seconds !== undefined)
       + Number(request.every_seconds !== undefined) + Number(request.daily !== undefined)
       + Number(request.weekly !== undefined) + Number(request.cron !== undefined) > 1) {
@@ -248,7 +249,7 @@ export class ScheduleService extends TypertRemoteService {
     else if (request.weekly !== undefined) record = createWeeklyScheduleRecord(id, request.prompt, request.weekly, now, title)
     else if (request.cron !== undefined) record = createCronScheduleRecord(id, request.prompt, request.cron, now, title)
     else throw new ScheduleInputError('invalid_selector', 'Exactly one reminder selector is required.')
-    return this.serialize(async () => {
+    return await this.serialize(async () => {
       const refusal = this.reminderTargetRefusal(sessionId)
       if (refusal !== undefined) throw new ScheduleInputError('subagent_session', refusal.message)
       const domain = await this.getDomain()
@@ -324,7 +325,8 @@ export class ScheduleService extends TypertRemoteService {
    */
   @Remote('delete')
   async delete(request: ScheduleDeleteRequest, signal?: AbortSignal): Promise<ScheduleDeleteResult> {
-    return this.serialize<ScheduleDeleteResult>(async () => {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
+    return await this.serialize<ScheduleDeleteResult>(async () => {
       const tasks = (await this.getDomain()).table('tasks')
       signal?.throwIfAborted()
       const current = tasks.get(request.id)
@@ -354,7 +356,8 @@ export class ScheduleService extends TypertRemoteService {
    */
   @Remote('update')
   async update(request: ScheduleUpdateRequest, signal?: AbortSignal): Promise<ScheduleUpdateResult> {
-    return this.serialize<ScheduleUpdateResult>(async () => {
+    using _admission = this.ctx.bail('agent/admit-operation', { sessionId: request.sessionId })
+    return await this.serialize<ScheduleUpdateResult>(async () => {
       const refusal = this.reminderTargetRefusal(request.sessionId)
       if (refusal !== undefined) return refusal
       const tasks = (await this.getDomain()).table('tasks')

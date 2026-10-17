@@ -128,6 +128,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'ownerCtx', description: 'caller context that owns load, setup, and the live lifecycle.' }, { name: 'options', description: 'persisted identity, optional live parent, loop options, setup, and cancellation.' }],
         returns: 'the published handle.',
       },
+      {
+        signature: 'relocate( ownerCtx: Context, request: SessionRelocationRequest, options: Omit<ResumeAgentOptions, \'resumeSessionId\' | \'parentAgent\'>, callbacks: WorkspaceRelocationCallbacks, ): Promise<SessionRelocationResult>',
+        description: 'Replace an idle owned incarnation while retaining its exact storage lease. Recovery intent and related records are committed by their native owner.',
+        parameters: [{ name: 'ownerCtx', description: 'existing lifecycle owner, or owner for a cold identity.' }, { name: 'request', description: 'exact storage observation and operation identity.' }, { name: 'options', description: 'composition and model route for a cold identity.' }, { name: 'callbacks', description: 'related durable records and final operation outcome.' }],
+        returns: 'the committed placement with its revision after replacement flush.',
+      },
     ],
   },
   {
@@ -2089,6 +2095,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the created or reused Session identity and its preset when configured.',
       },
       {
+        signature: '@Remote({ name: \'relocationInfo\', resources: { session: (request: { readonly sessionId: SessionId }) => request.sessionId } }) async relocationInfo(request: { readonly sessionId: SessionId }, signal: AbortSignal): Promise<SessionRelocationInfo>',
+        description: 'Observe relocation support and the exact persisted revision without resuming a chat.',
+        parameters: [{ name: 'request', description: 'existing ordinary Session identity.' }, { name: 'signal', description: 'cancellation for the header observation.' }],
+        returns: 'support and the current directory/revision when the Session exists.',
+      },
+      {
+        signature: '@Remote({ name: \'relocate\', resources: { session: (request: SessionRelocateRequest) => request.sessionId, workspace: (request: SessionRelocateRequest) => request.targetWorkspaceId } }) async relocate(request: SessionRelocateRequest, signal: AbortSignal): Promise<SessionRelocateValue>',
+        description: 'Move one idle chat to an existing registered local project without moving its files.',
+        parameters: [{ name: 'request', description: 'destination, exact source observation, and stable operation UUID.' }, { name: 'signal', description: 'caller cancellation before durable work is admitted.' }],
+        returns: 'the verified same-ID chat and final persisted revision.',
+      },
+      {
         signature: '@Remote(\'selectModel\') selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue>',
         description: 'Select one Session-local model after explicitly resuming the Session; save the default in the background.',
         parameters: [{ name: 'request', description: 'Session identity and requested model selection.' }],
@@ -2226,9 +2244,20 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Durable append-only session storage addressed through per-session handles.\n\nStorage semantics shared by every backend: events are contiguous from seq 0 and never rewritten; a torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.\n\nVisibility: a created session is observable through `stat`/`list`/`open` in this process from the moment `create` resolves, even while a backend defers physical materialization (a pure optimization); other processes see the session only once it materializes, and a session that never materialized before a crash never existed. `SessionHandle.flush` forces materialization.\n\nFreshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.',
     methods: [
       {
+        signature: 'readonly supportsRelocation: boolean = false',
+        description: 'Whether this provider implements exclusive working-directory transactions.',
+        parameters: [],
+      },
+      {
         signature: 'readonly identity: symbol = Symbol(\'sessionPersistence\')',
         description: 'Process-local instance identity, stable through Context proxies and distinct after service replacement.',
         parameters: [],
+      },
+      {
+        signature: 'beginRelocation(_request: SessionRelocationRequest, _options?: SessionRelocationOptions): Promise<SessionRelocationTransaction>',
+        description: 'Prepare a directory change while retaining the session\'s exclusive write lease. The consumer reconciles related state, commits, and closes in a finally block.',
+        parameters: [{ name: '_request', description: 'caller identity and exact expected observation.' }, { name: '_options', description: 'optional live write ownership retained through teardown.' }],
+        returns: 'a transaction that retains ownership through commit or rollback.',
       },
       {
         signature: 'abstract create(header: SessionHeader, options?: SessionPersistenceCreateOptions): Promise<SessionHandle>',
@@ -3931,6 +3960,24 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the workspace, or `undefined` when unknown.',
       },
       {
+        signature: 'hasPendingRelocation(sessionId: SessionId): boolean',
+        description: 'Test whether an identity must remain unavailable until global recovery.',
+        parameters: [{ name: 'sessionId', description: 'identity about to accept ordinary work.' }],
+        returns: 'whether its durable relocation has no terminal outcome.',
+      },
+      {
+        signature: 'async sessionDirectoryContexts(observation: SessionDirectoryObservation): Promise<readonly SessionDirectoryContext[] | undefined>',
+        description: 'Capture a Session\'s directory history before publishing its lifecycle or showing relative references. Fork prefixes copy the parent\'s recorded contexts and remain independent afterwards.',
+        parameters: [{ name: 'observation', description: 'current header, inherited cut and event count from the Session owner or reader.' }],
+        returns: 'immutable contexts, or undefined when older relocation metadata cannot establish them.',
+      },
+      {
+        signature: 'relocateSession( request: WorkspaceSessionRelocationRequest, apply: (request: SessionRelocationRequest, callbacks: WorkspaceRelocationCallbacks) => Promise<SessionRelocationResult>, ): Promise<WorkspaceSessionRelocationResult>',
+        description: 'Serialize workspace membership with the native lifecycle and durable recovery intent.',
+        parameters: [{ name: 'request', description: 'observed source and registered target identity.' }, { name: 'apply', description: 'native lifecycle owner retaining admission and the physical write lease.' }],
+        returns: 'the durable, idempotent result after every owner has verified its state.',
+      },
+      {
         signature: 'list(): Workspace[]',
         description: 'Synchronous workspace projection in durable registry order. Every entity\'s `sessionIds` getter is already filtered by the startup/live canonical-cwd header index; this method performs no persistence reads.',
         parameters: [],
@@ -4014,6 +4061,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'sessionId', description: 'the session whose composition changed.' }, { name: 'agentPreset', description: 'the preset recorded by the committed selection.' }],
   },
   {
+    name: 'agent/admit-operation',
+    mode: 'bail',
+    signature: '\'agent/admit-operation\'(request: { sessionId: SessionId; agent?: Agent }): Disposable | undefined',
+    summary: 'Reserve ordinary work before its first side effect; the lifecycle owner rejects while relocation owns the identity.',
+    description: 'Reserve ordinary work before its first side effect; the lifecycle owner rejects while relocation owns the identity. Hold the result through all asynchronous preparation and registration. Absence means this factory does not implement relocation admission.',
+    parameters: [{ name: 'request', description: 'identity and optional exact incarnation accepting work.' }],
+  },
+  {
     name: 'agent/assistant-stream',
     mode: 'emit',
     signature: '\'agent/assistant-stream\'(this: Scoped<Agent>, payload: { agent: Agent; frame: AssistantStreamFrame }): void',
@@ -4076,6 +4131,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'Reject a proposed step or replace the messages that enter it.',
     description: 'Reject a proposed step or replace the messages that enter it. Calling `next()` preserves the current messages.',
     parameters: [{ name: 'payload', description: '.signal - the current turn\'s cancellation signal. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
+  },
+  {
+    name: 'agent/relocation-check',
+    mode: 'serial',
+    signature: '\'agent/relocation-check\'(this: Scoped<Agent>, request: { agent: Agent }): Promise<void> | void',
+    summary: 'Refuse teardown while a native owner retains unique non-transferable state.',
+    description: 'Refuse teardown while a native owner retains unique non-transferable state. Scope-filtered dispatch reaches the exact Agent and its preset owners.',
+    parameters: [{ name: 'request', description: 'exact incarnation reserved against new work.' }],
   },
   {
     name: 'agent/request',
@@ -4644,6 +4707,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'Ask the composed providers what still runs for a session before it is archived.',
     description: 'Ask the composed providers what still runs for a session before it is archived. A listener prepends its own SessionActivity entries to the result of `next()`; the registry\'s innermost callback returns an empty list, so a composition without providers archives freely. Any non-empty result refuses the archive without a write.',
     parameters: [{ name: 'request', description: 'the session about to be archived.' }, { name: 'next', description: 'delegate to the remaining providers.' }],
+  },
+  {
+    name: 'workspace/session-relocated',
+    mode: 'emit',
+    signature: '\'workspace/session-relocated\'(request: { sessionId: SessionId }): void',
+    summary: 'Publish a complete workspace view after relocation settlement.',
+    description: 'Publish a complete workspace view after relocation settlement.',
+    parameters: [{ name: 'request', description: 'identity whose membership and effective header settled.' }],
   },
   {
     name: 'workspace/session-stop',
@@ -7074,6 +7145,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionCreateValue {\n    readonly sessionId: SessionId;\n    readonly agentPreset?: string;\n}',
   },
   {
+    name: 'SessionDirectoryContext',
+    declaration: 'export interface SessionDirectoryContext {\n    readonly fromEvent: SessionLogOffset;\n    readonly cwd: string;\n}',
+  },
+  {
+    name: 'SessionDirectoryObservation',
+    declaration: 'export interface SessionDirectoryObservation {\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly eventCount: SessionLogOffset;\n}',
+  },
+  {
     name: 'SessionEndInput',
     declaration: 'export interface SessionEndInput {\n    reason: \'clear\' | \'logout\' | \'prompt_input_exit\' | \'resume\' | \'other\';\n    sessionId: string;\n}',
   },
@@ -7167,7 +7246,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionFollowFrame',
-    declaration: 'export type SessionFollowFrame = {\n    readonly type: \'snapshot\';\n    readonly header: SessionWireHeader;\n    readonly cursor: number;\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n    readonly projections: SessionProjectionBaseline;\n    readonly assistantStream?: SessionAssistantStreamBaseline;\n} | SessionEventEntry | {\n    readonly type: \'assistant-stream\';\n    readonly frame: SessionAssistantStreamFrame;\n};',
+    declaration: 'export type SessionFollowFrame = {\n    readonly type: \'snapshot\';\n    readonly header: SessionWireHeader;\n    readonly cursor: number;\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n    readonly projections: SessionProjectionBaseline;\n    readonly directoryContexts?: readonly SessionDirectoryContext[];\n    readonly assistantStream?: SessionAssistantStreamBaseline;\n} | SessionEventEntry | {\n    readonly type: \'assistant-stream\';\n    readonly frame: SessionAssistantStreamFrame;\n};',
   },
   {
     name: 'SessionFollowRequest',
@@ -7291,7 +7370,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionPage',
-    declaration: 'export interface SessionPage {\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n}',
+    declaration: 'export interface SessionPage {\n    readonly records: readonly SessionHistoryRecord[];\n    readonly hasMore: boolean;\n    readonly directoryContexts?: readonly SessionDirectoryContext[];\n}',
   },
   {
     name: 'SessionPageRequest',
@@ -7380,6 +7459,34 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionReferenceMentionCandidate',
     declaration: 'export interface SessionReferenceMentionCandidate extends SessionReferenceCandidate {\n    mention: string;\n}',
+  },
+  {
+    name: 'SessionRelocateRequest',
+    declaration: 'export interface SessionRelocateRequest {\n    readonly sessionId: SessionId;\n    readonly targetWorkspaceId: WorkspaceId;\n    readonly operationId: string;\n    readonly expectedCwd: string;\n    readonly expectedRevision: string;\n}',
+  },
+  {
+    name: 'SessionRelocateValue',
+    declaration: 'export interface SessionRelocateValue {\n    readonly sessionId: SessionId;\n    readonly sourceWorkspaceId: WorkspaceId;\n    readonly targetWorkspaceId: WorkspaceId;\n    readonly cwd: string;\n    readonly revision: string;\n    readonly operationId: string;\n}',
+  },
+  {
+    name: 'SessionRelocationInfo',
+    declaration: 'export interface SessionRelocationInfo {\n    readonly supported: boolean;\n    readonly cwd?: string;\n    readonly revision?: string;\n    readonly directoryContexts?: readonly SessionDirectoryContext[];\n}',
+  },
+  {
+    name: 'SessionRelocationOptions',
+    declaration: 'export interface SessionRelocationOptions {\n    readonly writer?: SessionHandle;\n}',
+  },
+  {
+    name: 'SessionRelocationRequest',
+    declaration: 'export interface SessionRelocationRequest {\n    readonly sessionId: SessionId;\n    readonly operationId: string;\n    readonly expectedCwd: string;\n    readonly expectedRevision: SessionPersistenceRevision;\n    readonly targetCwd: string;\n}',
+  },
+  {
+    name: 'SessionRelocationResult',
+    declaration: 'export interface SessionRelocationResult {\n    readonly sessionId: SessionId;\n    readonly operationId: string;\n    readonly sourceCwd: string;\n    readonly cwd: string;\n    readonly revision: SessionPersistenceRevision;\n}',
+  },
+  {
+    name: 'SessionRelocationTransaction',
+    declaration: 'export interface SessionRelocationTransaction {\n    commit(): Promise<SessionRelocationResult>;\n    rollback(): Promise<void>;\n    openWriter(): Promise<SessionHandle>;\n    complete(writer: SessionHandle, commitRelated?: () => Promise<void>): Promise<void>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'SessionRenameRequest',
@@ -8850,8 +8957,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface WorkspacePinValue {\n    readonly pinnedSessionIds: readonly SessionId[];\n}',
   },
   {
+    name: 'WorkspaceRelocationCallbacks',
+    declaration: 'export interface WorkspaceRelocationCallbacks {\n    prepare(observation: SessionDirectoryObservation): Promise<void>;\n    placed(header: SessionHeader): Promise<void>;\n    completed(result: SessionRelocationResult): Promise<void>;\n    rollback(header: SessionHeader | undefined): Promise<void>;\n}',
+  },
+  {
     name: 'WorkspaceRenameRequest',
     declaration: 'export interface WorkspaceRenameRequest {\n    readonly workspaceId: WorkspaceId;\n    readonly title: string;\n}',
+  },
+  {
+    name: 'WorkspaceSessionRelocationRequest',
+    declaration: 'export interface WorkspaceSessionRelocationRequest {\n    readonly sessionId: SessionId;\n    readonly operationId: string;\n    readonly expectedCwd: string;\n    readonly expectedRevision: SessionPersistenceRevision;\n    readonly targetWorkspaceId: WorkspaceId;\n}',
+  },
+  {
+    name: 'WorkspaceSessionRelocationResult',
+    declaration: 'export interface WorkspaceSessionRelocationResult extends SessionRelocationResult {\n    readonly sourceWorkspaceId: WorkspaceId;\n    readonly targetWorkspaceId: WorkspaceId;\n}',
   },
   {
     name: 'WorkspaceUnarchiveSessionRequest',
