@@ -8,10 +8,10 @@
  */
 
 import { factorySpace } from 'micromark-factory-space'
-import type {} from 'micromark-extension-math'
+import { math } from 'micromark-extension-math'
 import { markdownLineEnding, markdownSpace } from 'micromark-util-character'
 import { codes, constants, types } from 'micromark-util-symbol'
-import type { Construct, Extension, Previous, State, Tokenizer } from 'micromark-util-types'
+import type { Construct, Extension, Previous, State, Token, Tokenizer } from 'micromark-util-types'
 
 // oxlint-disable typescript/no-this-alias -- micromark binds tokenizer context only on the outer callback.
 
@@ -451,12 +451,133 @@ const dollarMathFlow = createMathFlow(
   codes.dollarSign,
 )
 
+/** ASCII [A-Za-z0-9], the prose flank that marks a dollar as currency or glued text. */
+function isAsciiAlphanumeric(code: number | null): boolean {
+  return code !== null
+    && (code >= 0x30 && code <= 0x39
+      || code >= 0x41 && code <= 0x5a
+      || code >= 0x61 && code <= 0x7a)
+}
+
+/**
+ * Single-dollar math text with an alphanumeric flanking guard, adapted from
+ * micromark-extension-math@3.1.0. Upstream pairs any two single dollars, so
+ * prose such as 'cost $1.5B, target $7B' becomes one math span and loses its
+ * text to KaTeX. A single dollar next to a word character is currency or
+ * glued prose, not a delimiter: the opening is rejected when the preceding
+ * code is alphanumeric, and a closing candidate is rejected when the following
+ * code is alphanumeric. Double dollars and backslash delimiters are untouched.
+ */
+const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
+  let sizeOpen = 0
+  let size = 0
+  let token: Token | undefined
+
+  return start
+
+  function start(code: number | null): State | undefined {
+    effects.enter('mathText')
+    effects.enter('mathTextSequence')
+    return sequenceOpen(code)
+  }
+
+  function sequenceOpen(code: number | null): State | undefined {
+    if (code === codes.dollarSign) {
+      effects.consume(code)
+      sizeOpen++
+      return sequenceOpen
+    }
+    effects.exit('mathTextSequence')
+    return between(code)
+  }
+
+  function between(code: number | null): State | undefined {
+    if (code === null) return nok(code)
+    if (code === codes.dollarSign) {
+      token = effects.enter('mathTextSequence')
+      size = 0
+      return sequenceClose(code)
+    }
+    if (code === codes.space) {
+      effects.enter('space')
+      effects.consume(code)
+      effects.exit('space')
+      return between
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding)
+      effects.consume(code)
+      effects.exit(types.lineEnding)
+      return between
+    }
+    effects.enter('mathTextData')
+    return data(code)
+  }
+
+  function data(code: number | null): State | undefined {
+    if (code === null || code === codes.space || code === codes.dollarSign || markdownLineEnding(code)) {
+      effects.exit('mathTextData')
+      return between(code)
+    }
+    effects.consume(code)
+    return data
+  }
+
+  function sequenceClose(code: number | null): State | undefined {
+    if (code === codes.dollarSign) {
+      effects.consume(code)
+      size++
+      return sequenceClose
+    }
+    if (size === sizeOpen) {
+      if (sizeOpen === 1 && isAsciiAlphanumeric(code)) return nok(code)
+      effects.exit('mathTextSequence')
+      effects.exit('mathText')
+      return ok(code)
+    }
+    if (token !== undefined) token.type = 'mathTextData'
+    return data(code)
+  }
+}
+
+const previousDollar: Previous = function (code) {
+  if (isAsciiAlphanumeric(code)) return false
+  return code !== codes.dollarSign
+    || this.events.at(-1)?.[1].type === types.characterEscape
+}
+
+const upstreamMathText = math().text?.[codes.dollarSign] as Construct | undefined
+
+const dollarMathText: Construct = {
+  name: 'mathText',
+  previous: previousDollar,
+  resolve: upstreamMathText?.resolve,
+  tokenize: tokenizeDollarMathText,
+}
+
 const backslashMath: Extension = {
   flow: {
     [codes.backslash]: backslashMathFlow,
     [codes.dollarSign]: dollarMathFlow,
   },
   text: { [codes.backslash]: backslashMathText },
+}
+
+/**
+ * Replace the math extension's single-dollar text construct with the guarded
+ * one. Removing upstream's construct is essential: a failed guarded candidate
+ * would otherwise fall through to it and still pair currency amounts.
+ * @param extension - The upstream math syntax extension.
+ * @returns A copy whose single-dollar text construct carries the flanking guard.
+ */
+export function mathWithDollarFlankingGuard(extension: Extension): Extension {
+  return {
+    ...extension,
+    text: {
+      ...(extension.text ?? {}),
+      [codes.dollarSign]: dollarMathText,
+    },
+  }
 }
 
 /**

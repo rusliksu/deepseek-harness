@@ -442,6 +442,27 @@ describe('MarkdownText', () => {
     expect(container.querySelector('table .katex')).not.toBeNull()
   })
 
+  it('keeps currency-like single-dollar pairs literal without weakening padded inline math', () => {
+    const { container } = render(<MarkdownText text={'Cost $1.5B, target $7B. Math $E = mc^2$ and $\\theta$.'} />)
+
+    expect(container.querySelectorAll('.katex')).toHaveLength(2)
+    expect(container.textContent).toContain('Cost $1.5B, target $7B.')
+  })
+
+  it('does not start single-dollar math after a word character', () => {
+    const { container } = render(<MarkdownText text={'Paid US$500, then $E = mc^2$.'} />)
+
+    expect(container.querySelectorAll('.katex')).toHaveLength(1)
+    expect(container.textContent).toContain('US$500')
+  })
+
+  it('keeps two currency amounts literal under the flanking guard', () => {
+    const { container } = render(<MarkdownText text={'Price $5 and $10; 50% off.'} />)
+
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('Price $5 and $10; 50% off.')
+  })
+
   it('keeps backslash delimiters correct across Markdown boundaries and malformed candidates', () => {
     const cases = [
       {
