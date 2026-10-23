@@ -107,7 +107,7 @@ describe('incremental streaming rendering', () => {
   })
 
   it('settles into the full math-enabled render after streaming', () => {
-    const doc = 'Value $E = mc^2$ inline.\n\nSecond.\n\nThird.\n\nFourth.'
+    const doc = 'Value \\(E = mc^2\\) inline.\n\nSecond.\n\nThird.\n\nFourth.'
     const live = render(<MarkdownText text={doc} streaming />)
     expect(live.container.querySelector('.katex')).toBeNull()
     live.rerender(<MarkdownText text={doc} />)

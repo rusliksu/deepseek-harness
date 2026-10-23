@@ -17,7 +17,7 @@ describe('compact MarkdownText', () => {
       '```ts\nconst answer = 42\n```',
       '---',
       '| Name | Value |\n| --- | --- |\n| answer | 42 |',
-      '$x^2$',
+      '\\(x^2\\)',
       '$$\nx + y = z\n$$',
     ].join('\n\n')
     const body = render(<MarkdownText text={text} />)

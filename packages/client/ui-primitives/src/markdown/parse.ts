@@ -22,6 +22,12 @@ import { mathCompatibility } from './mathCompatibility.ts'
 const gfmOptions = { singleTilde: false }
 
 /**
+ * Single dollars stay literal, as in currency such as `$5`; inline math uses
+ * `$$...$$` or `\(...\)`.
+ */
+const mathOptions = { singleDollarTextMath: false }
+
+/**
  * Parse GFM markdown (the streaming arm's grammar: no math, so incomplete
  * TeX never flashes KaTeX errors mid-stream).
  * @param text - Markdown source.
@@ -36,7 +42,8 @@ export function parseGfm(text: string): Root {
 
 /**
  * Parse GFM markdown plus TeX math with the compatibility delimiters
- * (the settled arm's grammar).
+ * (the settled arm's grammar). Single-dollar text stays literal (currency);
+ * inline math uses `$$...$$` or `\(...\)`.
  * @param text - Markdown source.
  * @returns The mdast root.
  */
@@ -45,7 +52,7 @@ export function parseGfmWithMath(text: string): Root {
     // `mathCompatibility()` MUST stay last: micromark dispatches the extension
     // registered last first, so its dollar flow takes precedence over `math()`
     // and keeps the opening line's text as math instead of upstream's fence meta.
-    extensions: [gfm(gfmOptions), cjkFriendlyStrong(), math(), mathCompatibility()],
+    extensions: [gfm(gfmOptions), cjkFriendlyStrong(), math(mathOptions), mathCompatibility()],
     mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
   }), text)
 }

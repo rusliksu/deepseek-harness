@@ -101,7 +101,7 @@ describe('MarkdownText', () => {
       '`**注意：**内容`',
       '**Notice:**text',
       '*提醒！*继续',
-      '$**注意：**内容$',
+      '\\(**注意：**内容\\)',
       '```md',
       '**注意：**内容',
       '```',
@@ -403,13 +403,13 @@ describe('MarkdownText', () => {
 
   it('renders inline and display TeX through KaTeX without enabling trusted commands', () => {
     const source = [
-      'Einstein wrote $E = mc^2$.',
+      'Einstein wrote \\(E = mc^2\\).',
       '',
       '$$',
       '\\frac{\\partial \\mathbf{u}}{\\partial t} + (\\mathbf{u} \\cdot \\nabla)\\mathbf{u} = -\\frac{1}{\\rho}\\nabla p',
       '$$',
       '',
-      '$\\href{javascript:alert(1)}{unsafe}$',
+      '\\(\\href{javascript:alert(1)}{unsafe}\\)',
     ].join('\n')
     const { container } = render(<MarkdownText text={source} />)
 
@@ -421,7 +421,7 @@ describe('MarkdownText', () => {
 
   it('renders common TeX delimiters and same-line tagged display blocks after the reply settles', () => {
     const source = [
-      'Inline dollar $\\theta$ and backslash \\(\\frac{1}{5}\\).',
+      'Inline backslash \\(\\theta\\) and \\(\\frac{1}{5}\\).',
       '',
       '\\[\\frac{\\pi}{4} < \\theta < \\frac{\\pi}{2}\\]',
       '',
@@ -429,7 +429,7 @@ describe('MarkdownText', () => {
       '',
       '| Symbol | Value |',
       '| --- | --- |',
-      '| $\\theta$ | \\(\\frac{1}{5}\\) |',
+      '| \\(\\theta\\) | \\(\\frac{1}{5}\\) |',
     ].join('\n')
     const { container } = render(<MarkdownText text={source} />)
 
@@ -440,6 +440,13 @@ describe('MarkdownText', () => {
       .toContain('\\tag{1}')
     expect(container.querySelector('.katex-error')).toBeNull()
     expect(container.querySelector('table .katex')).not.toBeNull()
+  })
+
+  it('keeps single-dollar amounts literal so currency never becomes math', () => {
+    const { container } = render(<MarkdownText text={'Price $5 and $10; 50% off.'} />)
+
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('Price $5 and $10; 50% off.')
   })
 
   it('keeps backslash delimiters correct across Markdown boundaries and malformed candidates', () => {
