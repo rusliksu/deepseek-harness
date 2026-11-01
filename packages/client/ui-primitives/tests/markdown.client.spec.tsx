@@ -463,6 +463,31 @@ describe('MarkdownText', () => {
     expect(container.textContent).toContain('Price $5 and $10; 50% off.')
   })
 
+  it('keeps shell substitution and spaced amounts literal without weakening math', () => {
+    const cases = [
+      { source: 'echo $(pwd) and $(date)', math: 0 },
+      { source: 'echo $(pwd) $(date) $(time)', math: 0 },
+      { source: 'echo ${HOME} and ${PATH}', math: 0 },
+      { source: 'cuesta $ 449 y $ 225', math: 0 },
+      { source: '$(git status)$', math: 0 },
+      { source: '$(x+1)$', math: 1, value: '(x+1)' },
+      { source: '$(a)$', math: 1, value: '(a)' },
+      { source: '$ x $', math: 1, value: 'x' },
+      { source: '$a b$', math: 1, value: 'a b' },
+      { source: '$x$ y $z$', math: 2 },
+    ]
+
+    for (const item of cases) {
+      const rendered = render(<MarkdownText text={item.source} />)
+      expect(rendered.container.querySelectorAll('.katex')).toHaveLength(item.math)
+      if (item.math === 0) expect(rendered.container.textContent).toBe(item.source)
+      if ('value' in item) {
+        expect(rendered.container.querySelector('annotation')?.textContent).toBe(item.value)
+      }
+      rendered.unmount()
+    }
+  })
+
   it('keeps backslash delimiters correct across Markdown boundaries and malformed candidates', () => {
     const cases = [
       {

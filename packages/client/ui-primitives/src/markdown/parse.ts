@@ -43,7 +43,7 @@ export function parseGfm(text: string): Root {
 export function parseGfmWithMath(text: string): Root {
   return recoverLocalImages(fromMarkdown(text, {
     // `mathWithDollarFlankingGuard()` replaces upstream's single-dollar text
-    // construct so a rejected currency candidate cannot fall back to it.
+    // construct so a rejected currency or prose candidate cannot fall back to it.
     // `mathCompatibility()` MUST stay last: micromark dispatches the extension
     // registered last first, so its dollar flow takes precedence over `math()`
     // and keeps the opening line's text as math instead of upstream's fence meta.

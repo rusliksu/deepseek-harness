@@ -459,19 +459,52 @@ function isAsciiAlphanumeric(code: number | null): boolean {
       || code >= 0x61 && code <= 0x7a)
 }
 
+/** TeX or operator characters: a span that carries any of them is math, not prose. */
+const MATH_SIGNIFICANT: ReadonlySet<number> = new Set([
+  codes.backslash,
+  codes.caret,
+  codes.underscore,
+  codes.equalsTo,
+  codes.plusSign,
+  codes.dash,
+  codes.asterisk,
+  codes.slash,
+  codes.lessThan,
+  codes.greaterThan,
+  codes.verticalBar,
+])
+
+/** A dollar opening right before one of these starts shell substitution, not math. */
+const SHELL_OPENERS: ReadonlySet<number> = new Set([
+  codes.leftParenthesis,
+  codes.leftCurlyBrace,
+])
+
 /**
- * Single-dollar math text with an alphanumeric flanking guard, adapted from
- * micromark-extension-math@3.1.0. Upstream pairs any two single dollars, so
- * prose such as 'cost $1.5B, target $7B' becomes one math span and loses its
- * text to KaTeX. A single dollar next to a word character is currency or
- * glued prose, not a delimiter: the opening is rejected when the preceding
- * code is alphanumeric, and a closing candidate is rejected when the following
- * code is alphanumeric. Double dollars and backslash delimiters are untouched.
+ * Single-dollar math text with an alphanumeric flanking guard and a prose
+ * guard, adapted from micromark-extension-math@3.1.0. Upstream pairs any two
+ * single dollars, so prose such as 'cost $1.5B, target $7B' becomes one math
+ * span and loses its text to KaTeX. A single dollar next to a word character
+ * is currency or glued prose, not a delimiter: the opening is rejected when the
+ * preceding code is alphanumeric, and a closing candidate is rejected when the
+ * following code is alphanumeric. Flanks alone still accept prose whose dollars
+ * sit next to spaces or brackets, so a span without any operator or TeX
+ * command is rejected when it reads as shell substitution or as a spaced
+ * amount pair; 'a $ x $' and 'a $(x+1)$' keep both dollars as delimiters.
+ * Double dollars and backslash delimiters are untouched.
  */
 const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
   let sizeOpen = 0
   let size = 0
   let token: Token | undefined
+  let words = 0
+  let inWord = false
+  let significant = false
+  let hasSpace = false
+  let openPadded = false
+  let openShell = false
+  let closePadded = false
+  let seenOpen = false
 
   return start
 
@@ -498,6 +531,8 @@ const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
       size = 0
       return sequenceClose(code)
     }
+    observeOpen(code)
+    observeContent(code)
     if (code === codes.space) {
       effects.enter('space')
       effects.consume(code)
@@ -531,12 +566,49 @@ const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
     }
     if (size === sizeOpen) {
       if (sizeOpen === 1 && isAsciiAlphanumeric(code)) return nok(code)
+      if (sizeOpen === 1 && !significant && looksLikeProse()) return nok(code)
       effects.exit('mathTextSequence')
       effects.exit('mathText')
       return ok(code)
     }
     if (token !== undefined) token.type = 'mathTextData'
     return data(code)
+  }
+
+  /** Record the first content code: a padded opening or a shell substitution. */
+  function observeOpen(code: number): void {
+    if (seenOpen) return
+    seenOpen = true
+    openPadded = code === codes.space || markdownLineEnding(code)
+    openShell = SHELL_OPENERS.has(code)
+  }
+
+  /** Count words and math characters while the span is scanned. */
+  function observeContent(code: number): void {
+    if (code === codes.space || markdownLineEnding(code)) {
+      inWord = false
+      hasSpace = true
+      closePadded = true
+      return
+    }
+    if (!inWord) {
+      words++
+      inWord = true
+    }
+    closePadded = false
+    if (MATH_SIGNIFICANT.has(code)) significant = true
+  }
+
+  /**
+   * Whether a single-dollar span is prose rather than math: shell substitution
+   * ('echo $(pwd) and $(date)') or a spaced amount pair ('cuesta $ 449 y $ 225').
+   * Both sit between acceptable flanks, so only the content separates them from
+   * math; an operator or TeX command anywhere in the span keeps it math.
+   */
+  function looksLikeProse(): boolean {
+    const shellSubstitution = openShell && hasSpace
+    const spacedAmount = openPadded && closePadded && words >= 2
+    return shellSubstitution || spacedAmount
   }
 }
 
@@ -568,7 +640,7 @@ const backslashMath: Extension = {
  * one. Removing upstream's construct is essential: a failed guarded candidate
  * would otherwise fall through to it and still pair currency amounts.
  * @param extension - The upstream math syntax extension.
- * @returns A copy whose single-dollar text construct carries the flanking guard.
+ * @returns A copy whose single-dollar text construct carries the flanking and prose guards.
  */
 export function mathWithDollarFlankingGuard(extension: Extension): Extension {
   return {
