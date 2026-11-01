@@ -44,7 +44,7 @@ export function parseGfm(text: string): Root {
 export function parseGfmWithMath(text: string): Root {
   return recoverLocalImages(fromMarkdown(text, {
     // `mathWithDollarFlankingGuard()` replaces upstream's single-dollar text
-    // construct so a rejected currency candidate cannot fall back to it.
+    // construct so a rejected currency or prose candidate cannot fall back to it.
     extensions: [gfm(gfmOptions), cjkFriendlyStrong(), mathCompatibility(), mathWithDollarFlankingGuard(math())],
     mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown(), windowsPathDestinations()],
   }), text)
