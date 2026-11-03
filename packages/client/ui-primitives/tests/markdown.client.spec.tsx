@@ -471,6 +471,10 @@ describe('MarkdownText', () => {
       { source: '$(a)$', math: 1, value: '(a)' },
       { source: '$ x $', math: 1, value: 'x' },
       { source: '$a b$', math: 1, value: 'a b' },
+      { source: '$ a b $', math: 1, value: 'a b' },
+      { source: '$ 1 2 $', math: 1, value: '1 2' },
+      { source: '$ 2 x $', math: 0 },
+      { source: '$ 1,000 $', math: 0 },
       { source: '$x$ y $z$', math: 2 },
     ]
 

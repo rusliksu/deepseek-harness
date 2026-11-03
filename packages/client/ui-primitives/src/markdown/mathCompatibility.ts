@@ -338,25 +338,7 @@ function isAsciiAlphanumeric(code: number | null): boolean {
 }
 
 /** TeX or operator characters: a span that carries any of them is math, not prose. */
-const MATH_SIGNIFICANT: ReadonlySet<number> = new Set([
-  codes.backslash,
-  codes.caret,
-  codes.underscore,
-  codes.equalsTo,
-  codes.plusSign,
-  codes.dash,
-  codes.asterisk,
-  codes.slash,
-  codes.lessThan,
-  codes.greaterThan,
-  codes.verticalBar,
-])
-
-/** A dollar opening right before one of these starts shell substitution, not math. */
-const SHELL_OPENERS: ReadonlySet<number> = new Set([
-  codes.leftParenthesis,
-  codes.leftCurlyBrace,
-])
+const MATH_SIGNIFICANT = /[\\^_=+\-*/<>|]/
 
 /**
  * Single-dollar math text with an alphanumeric flanking guard and a prose
@@ -366,23 +348,17 @@ const SHELL_OPENERS: ReadonlySet<number> = new Set([
  * is currency or glued prose, not a delimiter: the opening is rejected when the
  * preceding code is alphanumeric, and a closing candidate is rejected when the
  * following code is alphanumeric. Flanks alone still accept prose whose dollars
- * sit next to spaces or brackets, so a span without any operator or TeX
- * command is rejected when it reads as shell substitution or as a spaced
- * amount pair; 'a $ x $' and 'a $(x+1)$' keep both dollars as delimiters.
+ * sit next to spaces or brackets, so a span without any operator or TeX command
+ * is rejected when it holds a shell substitution ('echo $(pwd) and $(date)'),
+ * a formatted amount ('$ 1,000 $'), or a digit next to a letter
+ * ('cuesta $ 449 y $ 225'); '$ 1 2 $' stays math because it holds only numbers.
  * Double dollars and backslash delimiters are untouched.
  */
 const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
   let sizeOpen = 0
   let size = 0
   let token: Token | undefined
-  let words = 0
-  let inWord = false
-  let significant = false
-  let hasSpace = false
-  let openPadded = false
-  let openShell = false
-  let closePadded = false
-  let seenOpen = false
+  let content = ''
 
   return start
 
@@ -409,15 +385,15 @@ const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
       size = 0
       return sequenceClose(code)
     }
-    observeOpen(code)
-    observeContent(code)
     if (code === codes.space) {
+      content += ' '
       effects.enter('space')
       effects.consume(code)
       effects.exit('space')
       return between
     }
     if (markdownLineEnding(code)) {
+      content += '\n'
       effects.enter(types.lineEnding)
       effects.consume(code)
       effects.exit(types.lineEnding)
@@ -432,6 +408,7 @@ const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
       effects.exit('mathTextData')
       return between(code)
     }
+    content += String.fromCharCode(code)
     effects.consume(code)
     return data
   }
@@ -444,49 +421,27 @@ const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
     }
     if (size === sizeOpen) {
       if (sizeOpen === 1 && isAsciiAlphanumeric(code)) return nok(code)
-      if (sizeOpen === 1 && !significant && looksLikeProse()) return nok(code)
+      if (sizeOpen === 1 && looksLikeProse()) return nok(code)
       effects.exit('mathTextSequence')
       effects.exit('mathText')
       return ok(code)
     }
     if (token !== undefined) token.type = 'mathTextData'
+    content += '$'.repeat(size)
     return data(code)
   }
 
-  /** Record the first content code: a padded opening or a shell substitution. */
-  function observeOpen(code: number): void {
-    if (seenOpen) return
-    seenOpen = true
-    openPadded = code === codes.space || markdownLineEnding(code)
-    openShell = SHELL_OPENERS.has(code)
-  }
-
-  /** Count words and math characters while the span is scanned. */
-  function observeContent(code: number): void {
-    if (code === codes.space || markdownLineEnding(code)) {
-      inWord = false
-      hasSpace = true
-      closePadded = true
-      return
-    }
-    if (!inWord) {
-      words++
-      inWord = true
-    }
-    closePadded = false
-    if (MATH_SIGNIFICANT.has(code)) significant = true
-  }
-
   /**
-   * Whether a single-dollar span is prose rather than math: shell substitution
-   * ('echo $(pwd) and $(date)') or a spaced amount pair ('cuesta $ 449 y $ 225').
-   * Both sit between acceptable flanks, so only the content separates them from
-   * math; an operator or TeX command anywhere in the span keeps it math.
+   * Whether a single-dollar span is prose rather than math. Every prose form
+   * sits between acceptable flanks, so only the content separates it from math;
+   * an operator or TeX command anywhere in the span keeps it math.
    */
   function looksLikeProse(): boolean {
-    const shellSubstitution = openShell && hasSpace
-    const spacedAmount = openPadded && closePadded && words >= 2
-    return shellSubstitution || spacedAmount
+    if (MATH_SIGNIFICANT.test(content)) return false
+    const shellSubstitution = (content.startsWith('(') || content.startsWith('{')) && /\s/.test(content)
+    const formattedAmount = /\d[,%]/.test(content)
+    const amountWithWord = /\d/.test(content) && /\p{L}/u.test(content)
+    return shellSubstitution || formattedAmount || amountWithWord
   }
 }
 
