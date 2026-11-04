@@ -426,6 +426,7 @@ const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
       effects.exit('mathText')
       return ok(code)
     }
+    /* v8 ignore next -- the closing candidate always enters its sequence token before this state. */
     if (token !== undefined) token.type = 'mathTextData'
     content += '$'.repeat(size)
     return data(code)
@@ -490,7 +491,7 @@ export function mathWithDollarFlankingGuard(extension: Extension): Extension {
   return {
     ...extension,
     text: {
-      ...(extension.text ?? {}),
+      ...extension.text,
       [codes.dollarSign]: dollarMathText,
     },
   }
