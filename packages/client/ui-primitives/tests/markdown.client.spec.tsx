@@ -467,6 +467,7 @@ describe('MarkdownText', () => {
       { source: 'echo ${HOME} and ${PATH}', math: 0 },
       { source: 'cuesta $ 449 y $ 225', math: 0 },
       { source: '$(git status)$', math: 0 },
+      { source: '$(a b)$', math: 1, value: '(a b)' },
       { source: '$(x+1)$', math: 1, value: '(x+1)' },
       { source: '$(a)$', math: 1, value: '(a)' },
       { source: '$ x $', math: 1, value: 'x' },

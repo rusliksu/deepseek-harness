@@ -439,9 +439,20 @@ const tokenizeDollarMathText: Tokenizer = function (effects, ok, nok) {
   function looksLikeProse(): boolean {
     if (MATH_SIGNIFICANT.test(content)) return false
     const shellSubstitution = (content.startsWith('(') || content.startsWith('{')) && /\s/.test(content)
+      && !singleCharacterTokens()
     const formattedAmount = /\d[,%]/.test(content)
     const amountWithWord = /\d/.test(content) && /\p{L}/u.test(content)
     return shellSubstitution || formattedAmount || amountWithWord
+  }
+
+  /**
+   * Whether the span is a run of one-character tokens ('(a b)', '1 2') — the
+   * shape math notation takes — rather than words a shell command is made of.
+   */
+  function singleCharacterTokens(): boolean {
+    const tokens = content.trim().split(/\s+/).filter(token => token.length > 0)
+    return tokens.length > 0
+      && tokens.every(token => Array.from(token.replace(/^[({]+/, '').replace(/[)}]+$/, '')).length === 1)
   }
 }
 
