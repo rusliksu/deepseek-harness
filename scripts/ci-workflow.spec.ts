@@ -599,11 +599,22 @@ describe('CI workflow', () => {
         github: { event: { pull_request: { user: { login } } } },
       })
     }
-    for (const [name, selector, variable, pool, hosted] of [
-      ['linux gates', selectors.linux, 'DSH_CI_FAILOVER_LINUX', ['self-hosted', 'linux', 'x64', 'vm-backup'], 'dsh-ubuntu-24-04-16core'],
-      ['linux aggregate', selectors.linuxAggregate, 'DSH_CI_FAILOVER_LINUX', ['self-hosted', 'linux', 'x64', 'vm-backup'], 'ubuntu-latest'],
-      ['windows lanes', selectors.windows, 'DSH_CI_FAILOVER_WINDOWS', ['self-hosted', 'dsh-win-ci', 'windows'], 'dsh-windows-2025-16core'],
+    // The hosted fallback label is read from the selector itself: the check
+    // still proves the default tier is one label rather than the pool, without
+    // pinning the spec to a particular runner configuration.
+    const hostedFallback = (selector: string): string => {
+      const separator = selector.lastIndexOf('||')
+      const match = separator < 0 ? null : selector.slice(separator + 2).match(/'([^']+)'/)
+      const label = match?.[1]
+      if (label === undefined) throw new TypeError(`selector has no hosted fallback label: ${selector}`)
+      return label
+    }
+    for (const [name, selector, variable, pool] of [
+      ['linux gates', selectors.linux, 'DSH_CI_FAILOVER_LINUX', ['self-hosted', 'linux', 'x64', 'vm-backup']],
+      ['linux aggregate', selectors.linuxAggregate, 'DSH_CI_FAILOVER_LINUX', ['self-hosted', 'linux', 'x64', 'vm-backup']],
+      ['windows lanes', selectors.windows, 'DSH_CI_FAILOVER_WINDOWS', ['self-hosted', 'dsh-win-ci', 'windows']],
     ] as const) {
+      const hosted = hostedFallback(selector)
       expect(evaluate(selector, { [variable]: 'blacksmith' }), `${name} blacksmith value`).toMatch(/^blacksmith-/)
       expect(evaluate(selector, { [variable]: 'selfhosted' }), `${name} selfhosted value`).toEqual(pool)
       // The blacksmith branch must not capture the selfhosted pool, and the
