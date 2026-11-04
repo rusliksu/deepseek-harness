@@ -13,8 +13,8 @@ import {
   SessionFormatUnsupportedMigrationError,
   sessionFormatCatalog,
 } from '@deepseek-ai/dsh-session-format-catalog'
-import { readdirSync, type Dirent } from 'node:fs'
-import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { constants, readdirSync, type Dirent } from 'node:fs'
+import { copyFile, open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -73,6 +73,18 @@ const DEFAULT_COMPRESSION: JsonlCompression = 'zstd'
  * remains an indivisible synchronous decode.
  */
 const ZSTD_DECODE_YIELD_INTERVAL_MS = 500
+
+/** Suffix of the pre-repair copy a torn-tail repair preserves beside the log. */
+const REPAIR_BACKUP_SUFFIX = '.torn-'
+
+/**
+ * Compact UTC stamp for a repair backup name.
+ * @param now - the repair time.
+ * @returns the stamp in `YYYYMMDDTHHmmssSSSZ` form, safe in a filename on every platform.
+ */
+function repairBackupStamp(now: Date = new Date()): string {
+  return now.toISOString().replace(/[-:.]/g, '')
+}
 
 /** Assert that the independently decodable first frame contains only the header record. */
 function assertZstdHeaderFrame(plaintext: Buffer): void {
@@ -935,14 +947,36 @@ class JsonlSessionPersistence extends SessionPersistence {
   }
 
   /**
-   * Truncate a torn physical tail durably before this session's first new append.
+   * Discard a torn physical tail durably before this session's first new append.
+   *
+   * The artifact is re-read and the truncation point recomputed before anything
+   * is written: the prefix in front of `truncateTo` must still decode and
+   * validate as the current format, and `truncateTo` must still be the start of
+   * the incomplete final frame or line. A mismatch refuses the repair as
+   * corruption instead of truncating through committed events. The pre-repair
+   * artifact is copied beside the log first, so the discarded bytes stay
+   * recoverable.
    * @param header - the session's stored header.
    * @param truncateTo - the byte offset the artifact is truncated to.
+   * @throws {SessionPersistenceCorruptionError} when the artifact on disk no longer
+   *   matches the torn-tail read that reported `truncateTo`.
    */
   async truncateTornTail(header: SessionHeader, truncateTo: number): Promise<void> {
     this.coldLogMemo.delete(header.id)
-    await this.repair(header, truncateTo)
-    this.ctx.logger.warn(`${this.name}: session "${header.id}" recovered from a torn tail; incomplete tail bytes were discarded`)
+    const path = logPath(this.root, header.cwd, header.id, this.compression)
+    const { size } = await stat(path)
+    if (!Number.isSafeInteger(truncateTo) || truncateTo < 0 || truncateTo > size) {
+      throw new SessionPersistenceCorruptionError(
+        `session "${header.id}": refusing to truncate "${path}" to ${truncateTo} bytes; the artifact holds ${size} bytes`,
+        { cause: new RangeError(`torn-tail offset ${truncateTo} is outside 0..${size}`) },
+      )
+    }
+    await this.assertRepairableTail(path, header, truncateTo)
+    const backupPath = await this.preserveRepairedTail(path)
+    await this.repair(path, truncateTo)
+    this.ctx.logger.warn(
+      `${this.name}: session "${header.id}" recovered from a torn tail; bytes after ${truncateTo} were discarded (pre-repair artifact preserved at "${backupPath}")`,
+    )
   }
 
   /**
@@ -1449,8 +1483,7 @@ class JsonlSessionPersistence extends SessionPersistence {
   }
 
   /** Truncate the log file to `offset` bytes and fsync (discard the crash tail). */
-  private async repair(meta: SessionHeader, offset: number): Promise<void> {
-    const path = logPath(this.root, meta.cwd, meta.id, this.compression)
+  private async repair(path: string, offset: number): Promise<void> {
     await truncate(path, offset)
     const handle = await open(path, 'r+')
     try {
@@ -1458,6 +1491,73 @@ class JsonlSessionPersistence extends SessionPersistence {
     } finally {
       await handle.close()
     }
+  }
+
+  /**
+   * Re-derive and validate the truncation point before a torn-tail repair.
+   *
+   * A repair discards only the bytes a crash left after the last complete
+   * record. Re-reading the artifact proves both halves of that claim against the
+   * bytes on disk now: every committed frame or line decodes and folds as the
+   * current format, and the reported offset is exactly the torn boundary
+   * (`undefined` when the artifact is complete). Any mismatch refuses the repair,
+   * leaving the artifact byte-identical for diagnosis.
+   * @param path - the physical artifact a repair would truncate.
+   * @param header - the stored header the artifact must identify.
+   * @param offset - the reported committed byte length a repair would keep.
+   */
+  private async assertRepairableTail(path: string, header: SessionHeader, offset: number): Promise<void> {
+    try {
+      const { bytes } = await readStableJsonlFile(path)
+      const parsed = this.compression === 'zstd'
+        ? await this.readZstdPrefix(bytes)
+        : (() => {
+          const { meta, inheritedEventCount, events, committedBytes } = scanLog(bytes)
+          return {
+            meta,
+            inheritedEventCount,
+            events,
+            tornTruncateTo: committedBytes < bytes.length ? committedBytes : undefined,
+            recoveredTail: [],
+          }
+        })()
+      if (parsed.tornTruncateTo !== offset) {
+        throw new Error(`recomputed torn-tail offset is ${String(parsed.tornTruncateTo)} instead of ${offset}`)
+      }
+      if (parsed.meta.id !== header.id) {
+        throw new Error(`stored header identifies session "${parsed.meta.id}" instead of "${header.id}"`)
+      }
+      validateStoredEvents(parsed.meta, parsed.events, this.locate(parsed.meta))
+    } catch (error: unknown) {
+      throw new SessionPersistenceCorruptionError(
+        `session "${header.id}": refusing to repair "${path}": the committed prefix at byte ${offset} does not validate: ${String(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
+  /**
+   * Preserve the pre-repair artifact beside the log before truncation.
+   *
+   * The copy is fsynced before the source is truncated: a crash during repair
+   * cannot leave the discarded bytes reachable only through the damaged
+   * artifact. Discovery ignores entries that are not generation filenames.
+   * @param path - the physical artifact about to be truncated.
+   * @returns the backup path written beside the artifact.
+   */
+  private async preserveRepairedTail(path: string): Promise<string> {
+    const backupPath = `${path}${REPAIR_BACKUP_SUFFIX}${repairBackupStamp()}.bak`
+    await copyFile(path, backupPath, constants.COPYFILE_EXCL)
+    const handle = await open(backupPath, 'r+')
+    try {
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    /* v8 ignore start -- POSIX-only directory durability; Windows publishes write-through. */
+    if (process.platform !== 'win32') await this.syncDirPosix(dirname(path))
+    /* v8 ignore stop */
+    return backupPath
   }
 
   // --- discovery helpers ---
