@@ -14,6 +14,7 @@ import {
   logPath, parseGenerationLogFilename, projectDir, projectKey, scanLog, sessionDir, SessionLogScanner,
   toHeaderLine,
 } from '../src/format.ts'
+import { compressZstdFrame } from '../src/zstd.ts'
 import {
   runPersistenceContract, meta, oneTurnLog, releasedV1OneTurnLog,
 } from '../../session-persistence/tests/contract.ts'
@@ -1777,6 +1778,83 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     expect(repaired).not.toContain('assistant/chunk')
     const reloaded = await readAll(ctx.sessionPersistence, m.id)
     expect(reloaded.events.map(e => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+
+    // The pre-repair artifact survives beside the log with every byte a crash
+    // left there, so the discarded fragment stays recoverable.
+    const directory = dirname(path)
+    const backup = (await readdir(directory)).find(name => name.includes('.torn-'))
+    expect(backup).toBeDefined()
+    expect(await readFile(join(directory, backup!))).toEqual(Buffer.concat([committed, Buffer.from(tail)]))
+  })
+
+  it('refuses a repair when the artifact changed after the torn-tail read', async () => {
+    const m = meta('stale-repair', '/proj')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const path = rawLogPath(root, '/proj', m.id)
+    const committed = await readFile(path)
+    const reader = await ctx.sessionPersistence.open(m.id, 'read')
+    const header = reader.header
+    await reader.close()
+
+    // Another writer appended a complete record after the read: the reported
+    // torn offset is no longer the torn boundary, so truncating there would
+    // discard that committed record.
+    const appended = Buffer.concat([
+      committed,
+      Buffer.from(`${JSON.stringify({ type: 'turn/start', seq: SessionSeq(6), time: 8, data: { turn: 2 } })}\n`),
+    ])
+    await writeFile(path, appended)
+
+    const storage = ctx.sessionPersistence as unknown as {
+      truncateTornTail: (header: SessionHeader, truncateTo: number) => Promise<void>
+    }
+    await expect(storage.truncateTornTail(header, committed.length))
+      .rejects.toThrow(/refusing to repair/)
+    expect(await readFile(path)).toEqual(appended)
+    expect((await readdir(dirname(path))).some(name => name.includes('.torn-'))).toBe(false)
+  })
+
+  it('refuses a truncation offset outside the artifact', async () => {
+    const m = meta('range-repair', '/proj')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const path = rawLogPath(root, '/proj', m.id)
+    const size = (await stat(path)).size
+    const reader = await ctx.sessionPersistence.open(m.id, 'read')
+    const header = reader.header
+    await reader.close()
+
+    const storage = ctx.sessionPersistence as unknown as {
+      truncateTornTail: (header: SessionHeader, truncateTo: number) => Promise<void>
+    }
+    await expect(storage.truncateTornTail(header, size + 1)).rejects.toThrow(/refusing to truncate/)
+    await expect(storage.truncateTornTail(header, -1)).rejects.toThrow(/refusing to truncate/)
+    expect((await readFile(path)).length).toBe(size)
+  })
+
+  it('refuses a repair whose artifact belongs to another session', async () => {
+    const owner = meta('owner-repair', '/proj')
+    await writeLog(ctx.sessionPersistence, owner, oneTurnLog())
+    const foreign = await readFile(rawLogPath(root, '/proj', owner.id))
+
+    const m = meta('foreign-repair', '/proj')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const path = rawLogPath(root, '/proj', m.id)
+    const reader = await ctx.sessionPersistence.open(m.id, 'read')
+    const header = reader.header
+    await reader.close()
+
+    // The artifact at this path no longer identifies the session that owns it,
+    // but it still reports a torn tail at the reported offset.
+    const torn = Buffer.from('{"type":"assistant/chunk","seq":6,"ti')
+    const artifact = Buffer.concat([foreign, torn])
+    await writeFile(path, artifact)
+
+    const storage = ctx.sessionPersistence as unknown as {
+      truncateTornTail: (header: SessionHeader, truncateTo: number) => Promise<void>
+    }
+    await expect(storage.truncateTornTail(header, foreign.length)).rejects.toThrow(/refusing to repair/)
+    expect(await readFile(path)).toEqual(artifact)
+    expect((await readdir(dirname(path))).some(name => name.includes('.torn-'))).toBe(false)
   })
 
   it('a stored open turn is served as stored, with no synthetic closers', async () => {
@@ -2139,6 +2217,75 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
 
     await expect(pending).rejects.toBe(reason)
     expect(discovery).toHaveBeenCalledWith(controller.signal)
+  })
+})
+
+describe('JsonlSessionPersistence: torn-tail repair safety', () => {
+  let ctx: Context
+  beforeEach(async () => {
+    root = await freshRoot()
+    ctx = new Context()
+    await ctx.plugin(JsonlSessionPersistence, { root, compression: 'zstd' })
+  })
+  afterEach(async () => { await ctx.fiber.dispose() })
+
+  it('preserves the compressed artifact beside the log before truncating', async () => {
+    const m = meta('zstd-repair', '/proj')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const path = logPath(root, '/proj', m.id, 'zstd')
+    const committed = await readFile(path)
+
+    // No newline: the recovered plaintext of a torn frame holds no complete
+    // record, so only the torn boundary is reported.
+    const frame = await compressZstdFrame(JSON.stringify({
+      type: 'turn/start', seq: SessionSeq(6), time: 9, data: { turn: 2 },
+    }))
+    const torn = frame.subarray(0, frame.length - 4)
+    await appendFile(path, torn)
+
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => undefined)
+    await appendBatch(ctx.sessionPersistence, m.id, [
+      { type: 'turn/start', seq: SessionSeq(6), time: 10, data: { turn: 2 } },
+      { type: 'turn/end', seq: SessionSeq(7), time: 11, data: { turn: 2, reason: { kind: 'interrupted' } } },
+    ])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('recovered from a torn tail'))
+
+    // The truncation discarded the torn frame, and the same write appended the
+    // new batch after the committed prefix.
+    const repaired = await readFile(path)
+    expect(repaired.subarray(0, committed.length)).toEqual(committed)
+    expect(repaired.length).toBeGreaterThan(committed.length)
+    const directory = dirname(path)
+    const backup = (await readdir(directory)).find(name => name.includes('.torn-'))
+    expect(backup).toBeDefined()
+    expect(await readFile(join(directory, backup!))).toEqual(Buffer.concat([committed, torn]))
+    expect((await readAll(ctx.sessionPersistence, m.id)).events.map(event => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  })
+
+  it('refuses to repair when the committed prefix no longer validates', async () => {
+    const m = meta('zstd-refuse', '/proj')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const path = logPath(root, '/proj', m.id, 'zstd')
+    const committed = await readFile(path)
+    const reader = await ctx.sessionPersistence.open(m.id, 'read')
+    const header = reader.header
+    await reader.close()
+
+    // Damage the committed event frame and leave one more torn frame: the
+    // complete frame now fails decompression, so no offset is repairable.
+    const torn = (await compressZstdFrame('tail\n')).subarray(0, 4)
+    const damaged = Buffer.from(committed)
+    damaged[damaged.length - 2] = 0xFF
+    const artifact = Buffer.concat([damaged, torn])
+    await writeFile(path, artifact)
+
+    const storage = ctx.sessionPersistence as unknown as {
+      truncateTornTail: (header: SessionHeader, truncateTo: number) => Promise<void>
+    }
+    await expect(storage.truncateTornTail(header, committed.length))
+      .rejects.toThrow(/refusing to repair/)
+    expect(await readFile(path)).toEqual(artifact)
+    expect((await readdir(dirname(path))).some(name => name.includes('.torn-'))).toBe(false)
   })
 })
 

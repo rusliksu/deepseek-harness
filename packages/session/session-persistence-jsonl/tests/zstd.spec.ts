@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { appendFile, mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
@@ -616,10 +616,11 @@ describe('JsonlSessionPersistence: default Zstandard encoding', () => {
       },
     ]
     const plaintext = openTurn.map(e => JSON.stringify(e)).join('\n') + '\n'
-    await appendFile(path, await tornFrame(plaintext, (decoded) => {
+    const torn = await tornFrame(plaintext, (decoded) => {
       const newlines = decoded.match(/\n/g)?.length ?? 0
       return newlines >= 2 && !decoded.endsWith('\n')
-    }))
+    })
+    await appendFile(path, torn)
 
     // Complete JSONL records already flushed into the torn frame are real
     // emitted events: reads recover them, while the half-written chunk stays
@@ -636,7 +637,10 @@ describe('JsonlSessionPersistence: default Zstandard encoding', () => {
       { type: 'turn/end', seq: SessionSeq(9), time: 11, data: { turn: 2, reason: { kind: 'interrupted' } } },
     ]
     await appendBatch(ctx.sessionPersistence, header.id, closers)
-    expect(warn).toHaveBeenCalledWith('session-persistence-jsonl: session "recover-torn" recovered from a torn tail; incomplete tail bytes were discarded')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('recovered from a torn tail'))
+    const backup = (await readdir(dirname(path))).find(name => name.includes('.torn-'))
+    expect(backup).toBeDefined()
+    expect(await readFile(join(dirname(path), backup!))).toEqual(Buffer.concat([committed, torn]))
 
     const repaired = await readFile(path)
     expect(repaired.subarray(0, committed.length)).toEqual(committed)
