@@ -16,7 +16,7 @@ import { mathFromMarkdown } from 'mdast-util-math'
 import { gfm } from 'micromark-extension-gfm'
 import { math } from 'micromark-extension-math'
 import { cjkFriendlyStrong } from './cjkFriendlyStrong.ts'
-import { mathCompatibility } from './mathCompatibility.ts'
+import { mathCompatibility, mathWithDollarFlankingGuard } from './mathCompatibility.ts'
 import { windowsPathDestinations } from './windows-path-destinations.ts'
 
 /** GFM strikethrough requires `~~`; a single `~` stays literal, as in ranges such as `10~20`. */
@@ -43,7 +43,9 @@ export function parseGfm(text: string): Root {
  */
 export function parseGfmWithMath(text: string): Root {
   return recoverLocalImages(fromMarkdown(text, {
-    extensions: [gfm(gfmOptions), cjkFriendlyStrong(), mathCompatibility(), math()],
+    // `mathWithDollarFlankingGuard()` replaces upstream's single-dollar text
+    // construct so a rejected currency or prose candidate cannot fall back to it.
+    extensions: [gfm(gfmOptions), cjkFriendlyStrong(), mathCompatibility(), mathWithDollarFlankingGuard(math())],
     mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown(), windowsPathDestinations()],
   }), text)
 }

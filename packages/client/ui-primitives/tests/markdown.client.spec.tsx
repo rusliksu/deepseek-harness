@@ -439,6 +439,57 @@ describe('MarkdownText', () => {
     expect(container.querySelector('table .katex')).not.toBeNull()
   })
 
+  it('keeps currency-like single-dollar pairs literal without weakening padded inline math', () => {
+    const { container } = render(<MarkdownText text={'Cost $1.5B, target $7B. Math $E = mc^2$ and $\\theta$.'} />)
+
+    expect(container.querySelectorAll('.katex')).toHaveLength(2)
+    expect(container.textContent).toContain('Cost $1.5B, target $7B.')
+  })
+
+  it('does not start single-dollar math after a word character', () => {
+    const { container } = render(<MarkdownText text={'Paid US$500, then $E = mc^2$.'} />)
+
+    expect(container.querySelectorAll('.katex')).toHaveLength(1)
+    expect(container.textContent).toContain('US$500')
+  })
+
+  it('keeps two currency amounts literal under the flanking guard', () => {
+    const { container } = render(<MarkdownText text={'Price $5 and $10; 50% off.'} />)
+
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('Price $5 and $10; 50% off.')
+  })
+
+  it('keeps shell substitution and spaced amounts literal without weakening math', () => {
+    const cases = [
+      { source: 'echo $(pwd) and $(date)', math: 0 },
+      { source: 'echo $(pwd) $(date) $(time)', math: 0 },
+      { source: 'echo ${HOME} and ${PATH}', math: 0 },
+      { source: 'cuesta $ 449 y $ 225', math: 0 },
+      { source: '$(git status)$', math: 0 },
+      { source: '$(a b)$', math: 1, value: '(a b)' },
+      { source: '$(x+1)$', math: 1, value: '(x+1)' },
+      { source: '$(a)$', math: 1, value: '(a)' },
+      { source: '$ x $', math: 1, value: 'x' },
+      { source: '$a b$', math: 1, value: 'a b' },
+      { source: '$ a b $', math: 1, value: 'a b' },
+      { source: '$ 1 2 $', math: 1, value: '1 2' },
+      { source: '$ 2 x $', math: 0 },
+      { source: '$ 1,000 $', math: 0 },
+      { source: '$x$ y $z$', math: 2 },
+    ]
+
+    for (const item of cases) {
+      const rendered = render(<MarkdownText text={item.source} />)
+      expect(rendered.container.querySelectorAll('.katex')).toHaveLength(item.math)
+      if (item.math === 0) expect(rendered.container.textContent).toBe(item.source)
+      if ('value' in item) {
+        expect(rendered.container.querySelector('annotation')?.textContent).toBe(item.value)
+      }
+      rendered.unmount()
+    }
+  })
+
   it('keeps backslash delimiters correct across Markdown boundaries and malformed candidates', () => {
     const cases = [
       {
