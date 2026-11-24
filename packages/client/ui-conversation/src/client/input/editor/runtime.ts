@@ -244,25 +244,30 @@ export class DraftEditorRuntime {
 
   /**
    * Insert pasted plain text over the current editor selection
-   * (placeholder-sanitized). The paste event's own default is suppressed by
-   * the caller; PASTE_TAG makes the paste its own history boundary, so one
-   * undo never removes both the paste and typing inside the merge window.
+   * (placeholder-sanitized). Line breaks and tabs become Lexical nodes: a text
+   * node cannot hold them, and one that does leaves the plain-text model and
+   * desyncs the DOM text mobile engines edit. The paste event's own default is
+   * suppressed by the caller; PASTE_TAG makes the paste its own history
+   * boundary, so one undo never removes both the paste and typing inside the
+   * merge window.
    * @param text - pasted plain text.
    */
   paste(text: string): void {
-    const clean = text.replace(REFERENCE_PLACEHOLDER_RE, '')
+    // Clipboard line endings: CRLF and a lone CR are both a single break, and
+    // neither may reach a text node.
+    const clean = text.replace(/\r\n?/g, '\n').replace(REFERENCE_PLACEHOLDER_RE, '')
     if (clean === '') return
     this.applyEdit(() => {
       const selection = $getSelection()
       if ($isRangeSelection(selection)) {
-        selection.insertText(clean)
+        selection.insertRawText(clean)
         return
       }
       // No selection yet (never-focused surface): land at the document end,
       // growing the first paragraph when the tree is empty.
       const root = $getRoot()
       if (root.getChildrenSize() === 0) root.append($createParagraphNode())
-      root.selectEnd().insertText(clean)
+      root.selectEnd().insertRawText(clean)
     }, PASTE_TAG)
   }
 
