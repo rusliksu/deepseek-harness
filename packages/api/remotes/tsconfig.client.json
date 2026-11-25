@@ -110,13 +110,16 @@
       "path": "../../boot/plugin-market"
     },
     {
-      "path": "../../document/office-to-pdf"
+      "path": "../../interaction/action-cards"
     },
     {
-      "path": "../account-controller"
+      "path": "../../extensions/plugin-recommendations"
     },
     {
-      "path": "../../credentials/deepseek-account"
+      "path": "../../document/office-kit"
+    },
+    {
+      "path": "../../account/deepseek-account"
     },
     {
       "path": "../../web/web"
