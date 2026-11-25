@@ -132,6 +132,25 @@ describe('CI workflow', () => {
     expect(afterSdk).toBeLessThanOrEqual(16)
   })
 
+  it('routes the in-house Linux runners to the hosted runner when the base repository is a fork', () => {
+    const workflow = loadWorkflow('.github/workflows/ci.yml')
+    if (!isRecord(workflow.jobs)) throw new TypeError('ci.yml must define jobs')
+    const inHouse: string[] = []
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      if (!isRecord(job) || typeof job['runs-on'] !== 'string' || !/'dsh-ubuntu-24-04-(?:8|16)core'/.test(job['runs-on'])) continue
+      inHouse.push(name)
+      // A fork owns none of the in-house labels, so the fallback must be hosted.
+      expect(
+        evaluateRunsOn(job['runs-on'], { vars: {}, matrix: {}, github: { event: { repository: { fork: true } } } }),
+        `${name} must fall back to the hosted runner for a fork base repository`,
+      ).toBe('ubuntu-latest')
+    }
+    expect(inHouse.sort()).toEqual([
+      'node-24', 'node-24-build', 'node-24-consumers', 'node-24-coverage',
+      'node-24-coverage-report', 'node-24-lint', 'node-24-web-snapshot',
+    ])
+  })
+
   it('keeps required PR verdicts covering runtime and publisher jobs', () => {
     const verdicts = [
       ['ci.yml', 'all-checks-passed'],
@@ -733,7 +752,7 @@ describe('CI workflow', () => {
       return evaluateRunsOn(expression, {
         vars,
         fromJSON: JSON.parse,
-        github: { event: { pull_request: { user: { login } } } },
+        github: { event: { repository: { fork: false }, pull_request: { user: { login } } } },
       })
     }
     for (const [name, selector, variable, pool, hosted] of [
