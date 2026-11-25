@@ -537,7 +537,15 @@ describe('CI workflow', () => {
       const cores = jobName === 'windows-native-tests' ? 2 : 16
       expect(evaluateRunsOn(job['runs-on'], { vars: { DSH_CI_FAILOVER_WINDOWS: 'blacksmith' } }))
         .toBe(`blacksmith-${cores}vcpu-windows-2025`)
-      expect(job.if).toBe("github.event_name == 'pull_request'")
+      expect(job.if).toBe("github.event_name == 'pull_request' && github.event.repository.fork == false")
+    }
+    // The in-house Windows label does not exist in a fork, so every Windows job
+    // runs only where the base repository is not a fork; the verdict follows them
+    // instead of failing on skipped needs.
+    for (const jobName of ['windows-publisher', 'windows-build', 'windows-coverage', 'windows-native-tests', 'windows-checks-passed']) {
+      const job = windowsWorkflow.jobs[jobName]
+      if (!isRecord(job)) throw new TypeError(`${jobName} must define a job`)
+      expect(String(job.if), `${jobName} must skip a fork base repository`).toContain('github.event.repository.fork == false')
     }
 
     // windows-build runs the blocking build/site pair.
@@ -676,7 +684,10 @@ describe('CI workflow', () => {
     expect(windowsAggregate.needs).toEqual(['windows-publisher', 'windows-build', 'windows-native-tests'])
     expect(windowsAggregate.name).toBe('windows checks passed')
     expect(windowsAggregate['runs-on']).toBe(aggregate['runs-on'])
-    expect(windowsAggregate.if).toBe(aggregate.if)
+    expect(aggregate.if).toBe("${{ !cancelled() && github.event_name == 'pull_request' }}")
+    // A fork has no Windows runner, so the verdict skips with the jobs it covers
+    // instead of failing on skipped needs.
+    expect(windowsAggregate.if).toBe("${{ !cancelled() && github.event_name == 'pull_request' && github.event.repository.fork == false }}")
     // The benchmark lane is a required verdict input and runs alone so its
     // wall-clock budgets never share a runner with a concurrent aggregate.
     expect(aggregate.needs).toContain('node-24-bench')
