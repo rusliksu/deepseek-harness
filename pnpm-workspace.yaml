@@ -21,6 +21,12 @@ overrides:
   'undici@^6': '6.29.1'
   'undici@^7': '7.30.2'
   'undici@^8': '8.12.4'
+  # Security pins for transitively resolved packages reported by Dependabot.
+  '@modelcontextprotocol/sdk@^1': '1.32.0'
+  'fast-uri@^3': '3.1.9'
+  'follow-redirects@^1': '1.16.2'
+  'hono@^4': '4.13.16'
+  'ip-address@^10': '10.7.4'
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
 
