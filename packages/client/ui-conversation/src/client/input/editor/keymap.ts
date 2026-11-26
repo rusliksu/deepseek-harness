@@ -340,13 +340,16 @@ export function registerComposerKeymap(editor: LexicalEditor, handlers: Composer
       return true
     }, COMMAND_PRIORITY_CRITICAL),
     editor.registerCommand(PASTE_COMMAND, (event) => {
-      // Duck-typed: the payload union includes InputEvent, and test engines
-      // deliver clipboardData on plain events.
-      const clipboardData = (event as ClipboardEvent).clipboardData ?? null
-      if (clipboardData === null) return false
-      const { files, directories } = clipboardFiles(clipboardData)
+      // Duck-typed: the payload union includes InputEvent — a browser that
+      // reports the paste as `beforeinput` carries the data in `dataTransfer` —
+      // and test engines deliver clipboardData on plain events.
+      const clipboard = (event as ClipboardEvent).clipboardData
+        ?? (event as InputEvent).dataTransfer
+        ?? null
+      if (clipboard === null) return false
+      const { files, directories } = clipboardFiles(clipboard)
       if (files.length > 0) handlers.intakeFiles(files, directories.size === 0 ? undefined : directories)
-      const text = clipboardData.getData('text/plain')
+      const text = clipboard.getData('text/plain')
       if (text === '') {
         if (files.length === 0) return false
         event.preventDefault()

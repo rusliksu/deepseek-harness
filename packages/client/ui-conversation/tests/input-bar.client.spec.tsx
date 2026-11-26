@@ -16,7 +16,7 @@ import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { createPortal } from 'react-dom'
-import { $getRoot, $isTextNode } from 'lexical'
+import { $getRoot, $isTextNode, PASTE_COMMAND } from 'lexical'
 import {
   allowAllAccess, bindSnapshotSelector, conversationSnapshot as conversationFixture, makeTranslate, RemoteError,
   sessionSnapshot as sessionFixture,
@@ -557,6 +557,35 @@ describe('composer placeholder visibility', () => {
     expect(view.container.querySelector('[data-composer-placeholder]')).toBeNull()
     writeDraft(shell, '')
     expect(view.container.querySelector('[data-composer-placeholder]')).not.toBeNull()
+  })
+})
+
+describe('multi-line paste', () => {
+  it('keeps every pasted line over an existing draft, without raw line breaks in a text node', async () => {
+    const { textarea, shell } = bench({ draft: 'existing' })
+    fireEvent.paste(textarea, { clipboardData: { items: [], getData: () => 'one\ntwo\nthree' } })
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toContain('one\ntwo\nthree') })
+    expect(shell.snapshot.draft).toContain('existing')
+    const textNodes = shell.editor.getEditorState().read(() => $getRoot().getAllTextNodes().map(node => node.getTextContent()))
+    // A text node cannot hold U+000A/U+000D: Lexical stores them as LineBreakNode,
+    // and a raw one desyncs the DOM text mobile engines edit, truncating the draft.
+    expect(textNodes.filter(text => /[\n\r]/.test(text))).toEqual([])
+  })
+
+  it('normalizes clipboard line endings before insertion', async () => {
+    const { textarea, shell } = bench()
+    fireEvent.paste(textarea, { clipboardData: { items: [], getData: () => 'one\r\ntwo\rthree' } })
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('one\ntwo\nthree') })
+  })
+
+  it('accepts the beforeinput payload that carries dataTransfer instead of clipboardData', async () => {
+    const { shell } = bench()
+    const event = {
+      preventDefault: () => {},
+      dataTransfer: { items: [], getData: () => 'pasted' },
+    }
+    act(() => { shell.editor.dispatchCommand(PASTE_COMMAND, event as never) })
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('pasted') })
   })
 })
 
