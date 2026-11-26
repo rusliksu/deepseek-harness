@@ -1,5 +1,8 @@
 name: CI
 
+# Routing proof: a fork owns none of the in-house runner labels, so the big
+# Linux jobs below fall back to ubuntu-latest there.
+
 on:
   pull_request:
 permissions:
