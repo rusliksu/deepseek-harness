@@ -45,7 +45,7 @@ function evaluateCondition(expression: string, cancelled: boolean, results: stri
     always: () => true,
     contains: (values: string[], value: string) => values.includes(value),
     results,
-    github: { event_name: event },
+    github: { event_name: event, event: { repository: { fork: false } } },
   }, { timeout: 1000 }) as boolean
 }
 
