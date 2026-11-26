@@ -26,6 +26,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  delete process.env.DSH_RIPGREP_PATH
   Reflect.deleteProperty(process, 'pkg')
   Reflect.deleteProperty(process.versions, 'electron')
   Reflect.defineProperty(process, 'platform', { configurable: true, enumerable: true, value: originalPlatform })
@@ -33,6 +34,27 @@ afterEach(() => {
 })
 
 describe('ripgrep resolution', () => {
+  it('prefers an absolute DSH_RIPGREP_PATH override', async () => {
+    process.env.DSH_RIPGREP_PATH = '/venv/lib/search/rg'
+    existsSync.mockReturnValue(true)
+    const { resolveRgPath } = await import('@deepseek-ai/dsh-util-ripgrep')
+
+    await expect(resolveRgPath()).resolves.toBe('/venv/lib/search/rg')
+    expect(existsSync).toHaveBeenCalledWith('/venv/lib/search/rg')
+  })
+
+  it('rejects a relative or missing DSH_RIPGREP_PATH override', async () => {
+    const { resolveRgPath } = await import('@deepseek-ai/dsh-util-ripgrep')
+    process.env.DSH_RIPGREP_PATH = 'bin/rg'
+    await expect(resolveRgPath()).rejects.toThrow('DSH_RIPGREP_PATH must be absolute')
+
+    vi.resetModules()
+    existsSync.mockReturnValue(false)
+    process.env.DSH_RIPGREP_PATH = '/venv/lib/search/rg'
+    const reloaded = await import('@deepseek-ai/dsh-util-ripgrep')
+    await expect(reloaded.resolveRgPath()).rejects.toThrow('DSH_RIPGREP_PATH does not exist')
+  })
+
   it('uses the native sidecar beside the current executable', async () => {
     Reflect.defineProperty(process, 'pkg', { configurable: true, value: {} })
     Reflect.defineProperty(process, 'platform', { configurable: true, enumerable: true, value: 'linux' })

@@ -1,18 +1,26 @@
 /** Packaged ripgrep resolution and subprocess execution, independent of tool or Remote consumers. */
 import { existsSync } from 'node:fs'
-import { join, parse } from 'node:path'
+import { isAbsolute, join, parse } from 'node:path'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessRuntime, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 
 let rgPathPromise: Promise<string> | undefined
 
 /**
- * Resolve the packaged executable lazily, once per process. Single-file runtimes use an existing
- * `-rg` sidecar; Electron uses the unpacked ASAR path. Resolution failures reject
+ * Resolve the packaged executable lazily, once per process. A `DSH_RIPGREP_PATH`
+ * override names the binary for a wheel that installs it separately; it must be an
+ * absolute path to an existing file. Otherwise single-file runtimes use an existing
+ * `-rg` sidecar and Electron uses the unpacked ASAR path. Resolution failures reject
  * this call, not package loading. No system executable or remote fallback is used.
  * @returns the packaged executable's absolute path.
  */
 export function resolveRgPath(): Promise<string> {
   rgPathPromise ??= Promise.resolve().then(async () => {
+    const override = process.env.DSH_RIPGREP_PATH
+    if (override !== undefined) {
+      if (!isAbsolute(override)) throw new Error(`DSH_RIPGREP_PATH must be absolute: ${override}`)
+      if (!existsSync(override)) throw new Error(`DSH_RIPGREP_PATH does not exist: ${override}`)
+      return override
+    }
     const executable = parse(process.execPath)
     const executableSidecar = process.platform === 'win32'
       ? join(executable.dir, `${executable.name}-rg.exe`)
