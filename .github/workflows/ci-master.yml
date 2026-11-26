@@ -140,7 +140,8 @@ jobs:
   # persistent pnpm store and tool caches make them redundant (and saving here
   # would poison the hosted cache namespace with self-hosted paths).
   serial-linux-selfhosted:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Standby drills need the in-house VM pool, which a fork does not own.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && github.event.repository.fork == false
     name: serial / linux (self-hosted standby)
     runs-on: [self-hosted, linux, x64, vm-backup]
     steps:
@@ -234,7 +235,8 @@ jobs:
   # (and saving here would poison the hosted cache namespace with self-hosted
   # paths).
   serial-windows:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Standby drills need the in-house Windows pool, which a fork does not own.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && github.event.repository.fork == false
     name: serial / windows (self-hosted standby)
     runs-on: [self-hosted, dsh-win-ci, windows]
     timeout-minutes: 120
