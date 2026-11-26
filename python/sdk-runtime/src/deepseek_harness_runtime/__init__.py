@@ -5,9 +5,10 @@ Two runtime carriers coexist under ``runtime/``, both injected by the repo's
 
 - **exe (production)**: single-file Node executables named
   ``deepseek-harness-sdk-runtime-<platform>-<arch>`` for Linux/macOS and an
-  ``.exe`` counterpart for Windows. Each has a sibling ripgrep executable;
-  macOS also uses a sibling ``-spawn-helper``. The target machine needs no
-  Node installation.
+  ``.exe`` counterpart for Windows; macOS also uses a sibling ``-spawn-helper``.
+  The target machine needs no Node installation. The ripgrep binary ships
+  separately in deepseek-harness-search-bin and reaches the runtime through
+  ``DSH_RIPGREP_PATH``.
 - **node (dev-only)**: the full deploy closure under ``runtime/node/``
   (``package.json`` + ``node_modules/``), executed as ``node
   runtime/node/runtime-bootstrap.mjs`` on a
@@ -27,6 +28,7 @@ import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import MutableMapping
 from pathlib import Path
 from ._resources import validate_downloads, validate_resources, office_launch_args
 
@@ -59,8 +61,9 @@ def bundled_runtime_path() -> Path:
     """Absolute path of the bundled single-file runtime executable for the current platform.
 
     Raises FileNotFoundError when the platform is unsupported, the executable
-    has not been placed into this package, the ripgrep sidecar or download
-    manifest is missing, or the required macOS spawn helper is missing.
+    has not been placed into this package, the download manifest is missing, or
+    the required macOS spawn helper is missing. The ripgrep sidecar is optional:
+    deepseek-harness-search-bin supplies it through DSH_RIPGREP_PATH.
     Invalid download metadata raises ValueError. Missing executable messages name
     the acquisition routes (acquisition strategy is deliberately separate from
     this lookup interface, so an on-demand download can replace it without
@@ -72,16 +75,6 @@ def bundled_runtime_path() -> Path:
     if not path.is_file():
         raise FileNotFoundError(
             f"deepseek-harness-runtime-bin is missing the runtime executable at {path}. "
-            + _EXE_ACQUISITION_HINT
-        )
-    ripgrep = (
-        path.with_name(f"{path.stem}-rg.exe")
-        if tag.startswith("win-")
-        else Path(f"{path}-rg")
-    )
-    if not ripgrep.is_file():
-        raise FileNotFoundError(
-            f"deepseek-harness-runtime-bin is missing the ripgrep sidecar at {ripgrep}. "
             + _EXE_ACQUISITION_HINT
         )
     if tag.startswith("macos-"):
@@ -116,6 +109,31 @@ def resolve_bundled_launch_args(mode: str | None = None) -> tuple[str, ...]:
         f"unsupported DeepSeek Harness runtime mode {selected!r}: expected 'exe' or 'node' "
         f"(explicit argument or ${RUNTIME_MODE_ENV_VAR})"
     )
+
+
+def search_ripgrep_path() -> Path | None:
+    """Absolute path of the ripgrep binary from the optional search wheel.
+
+    Returns None when deepseek-harness-search-bin is not installed, which leaves
+    the runtime without glob and grep rather than failing every launch. Raises
+    FileNotFoundError when the wheel is installed without its payload.
+    """
+    try:
+        from deepseek_harness_search import ripgrep_path
+    except ModuleNotFoundError as error:
+        if error.name == "deepseek_harness_search":
+            return None
+        raise
+    return ripgrep_path()
+
+
+def apply_search_override(env: MutableMapping[str, str]) -> None:
+    """Point the runtime at the installed search wheel unless the caller chose a binary."""
+    if env.get("DSH_RIPGREP_PATH"):
+        return
+    path = search_ripgrep_path()
+    if path is not None:
+        env["DSH_RIPGREP_PATH"] = str(path)
 
 
 def _current_platform_tag() -> str:
@@ -203,6 +221,7 @@ def main() -> None:
         )
         raise SystemExit(2)
     argv = (*resolve_bundled_launch_args(), *sys.argv[1:])
+    apply_search_override(os.environ)
     if sys.platform == "win32":
         # Windows CRT exec does not replace the process; wait and preserve the runtime status.
         raise SystemExit(subprocess.run(argv, env=os.environ).returncode)

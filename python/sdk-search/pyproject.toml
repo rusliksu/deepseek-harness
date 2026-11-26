@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deepseek-harness-search-bin"
+version = "0.0.0.dev0"
+description = "Bundled ripgrep binary for the DeepSeek Harness Python SDK runtime"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "DeepSeek" }]
+
+[project.urls]
+Homepage = "https://github.com/deepseek-ai/deepseek-harness"
+Documentation = "https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/python-sdk.md"
+Issues = "https://github.com/deepseek-ai/deepseek-harness/issues"
+Source = "https://github.com/deepseek-ai/deepseek-harness"
+
+# Ship the platform ripgrep binary the runtime executes for glob and grep.
+[tool.hatch.build]
+artifacts = ["src/deepseek_harness_search/bin/*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/deepseek_harness_search"]
+# The release job uses Twine 6.2.0, which accepts core metadata through 2.4.
+core-metadata-version = "2.4"
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+
+[tool.hatch.build.targets.sdist.hooks.custom]

@@ -79,11 +79,9 @@ class RuntimeBuildHook(BuildHookInterface):
         runtime_files = sorted(
             (path for path in runtime_dir.iterdir() if path.name != "node") if runtime_dir.is_dir() else []
         )
-        expected_files = (
-            [expected_executable, f"{expected_executable.removesuffix('.exe')}-rg.exe"]
-            if expected_executable.endswith(".exe")
-            else [expected_executable, f"{expected_executable}-rg"]
-        )
+        # The ripgrep binary ships in deepseek-harness-search-bin, so the runtime
+        # wheel carries only the executable and the macOS spawn helper.
+        expected_files = [expected_executable]
         if "-macos-" in expected_executable:
             expected_files.append(f"{expected_executable}-spawn-helper")
         resources = runtime_dir / target

@@ -8,9 +8,11 @@ Platform runtime wheel for the DeepSeek Harness Python SDK. It packages the norm
 
 The wheel installs a `dsh` console command and the `deepseek_harness_runtime` Python module. `dsh` forwards its arguments to the bundled executable and requires a non-empty `DSH_HOME`; it never falls back to `~/.dsh`.
 
-Production executables are named `deepseek-harness-sdk-runtime-<platform>-<arch>` under the module's `runtime/` directory; Windows uses the `.exe` suffix. Linux and macOS wheels include a target-native `-rg` sidecar, Windows includes `-rg.exe`, and macOS also includes `-spawn-helper` for `node-pty`. Published targets are Linux x64, Linux arm64, macOS arm64, macOS x64, and Windows x64. The wheel tag and payload must match exactly; no Windows arm64 wheel is published.
+Production executables are named `deepseek-harness-sdk-runtime-<platform>-<arch>` under the module's `runtime/` directory; Windows uses the `.exe` suffix, and macOS also includes `-spawn-helper` for `node-pty`. Published targets are Linux x64, Linux arm64, macOS arm64, macOS x64, and Windows x64. The wheel tag and payload must match exactly; no Windows arm64 wheel is published.
 
 The wheel carries only the executable, native execution helpers, and `<platform>-<arch>/` with `downloads.json`. Office skills ship inside the executable. CPython, authoring libraries, standalone Node, pnpm, and the complete Office sidecar are optional downloads. Importing Python modules, starting SDK profiles, and processing Office files never download resources.
+
+The ripgrep binary is a separate distribution, `deepseek-harness-search-bin`, because it kept this wheel above PyPI's 100 MB single-file limit. Install it at the same version to keep the `glob` and `grep` tools available; the launcher passes its path to the runtime through `DSH_RIPGREP_PATH`, and an explicit value in the environment always wins. Without the wheel the runtime starts normally and only search reports that ripgrep is unavailable.
 
 Download either resource explicitly before using it:
 
