@@ -17,6 +17,7 @@ import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import { resolveLinuxNodePtyAddon, resolveWindowsNodePtyAddons } from './executable-native-pty.ts'
 import { officeSidecarArchives, runtimeNpmArchive, OFFICE_ASSET_IGNORES } from './build-exe-for-python-sdk-office.ts'
+import { foreignNodePtyPrebuilds } from './build-exe-for-python-sdk-prebuilds.ts'
 import { syncPythonRuntimeProduct } from './build-exe-for-python-sdk-resources.ts'
 import { deduplicateStagedWorkspacePackages, materializeStagedLinks } from './build-exe-for-python-sdk-staging.ts'
 import primaryLock from './primary-runtime/lock.json' with { type: 'json' }
@@ -337,6 +338,36 @@ class SingleExeBuild {
     }
   }
 
+  /**
+   * Drop native prebuilds no packaged target can load.
+   *
+   * The production closure carries node-pty prebuilds for every platform; a
+   * packaged executable only ever loads the one matching its target, so the
+   * foreign directories are dead weight in the injected archive.
+   * @returns Resolves after the foreign prebuild directories are removed.
+   */
+  async pruneForeignPrebuilds(): Promise<void> {
+    const prebuilds = join(this.staging, 'node_modules', 'node-pty', 'prebuilds')
+    let entries
+    try {
+      entries = await readdir(prebuilds, { withFileTypes: true })
+    } catch (error) {
+      // Child-process launches are optional in some profiles, and a closure
+      // without node-pty ships no prebuilds to prune.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    const directories = entries.filter(entry => entry.isDirectory()).map(entry => entry.name)
+    for (const name of foreignNodePtyPrebuilds(directories, this.cli.targets.map(target => ({
+      platform: target.platform, arch: target.arch,
+    })))) {
+      const directory = join(prebuilds, name)
+      if (this.cli.dryRun) {
+        console.log(`build-exe-for-python-sdk: [dry-run] rm -rf ${directory}`)
+      } else await rm(directory, { recursive: true, force: true })
+    }
+  }
+
   /** Replace deploy-time package links with files and reject any remaining link. */
   private async materializeStagedLinks(): Promise<void> {
     if (this.cli.dryRun) {
@@ -625,6 +656,7 @@ async function main(): Promise<void> {
   await pipeline.verifyClosure()
   await pipeline.build()
   await pipeline.deployStaging()
+  await pipeline.pruneForeignPrebuilds()
   await pipeline.injectPkgConfig()
   const products: string[] = []
   for (const target of cli.targets) products.push(...await pipeline.pack(target))
