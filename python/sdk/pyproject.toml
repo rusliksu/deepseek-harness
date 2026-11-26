@@ -22,7 +22,12 @@ Issues = "https://github.com/deepseek-ai/deepseek-harness/issues"
 Source = "https://github.com/deepseek-ai/deepseek-harness"
 
 [dependency-groups]
-test = ["pytest>=8.0", "Pillow==12.3.0"]
+test = [
+  "pytest>=8.0",
+  # Pillow 13 dropped Python 3.10, which the CI matrix still covers.
+  "Pillow==12.3.0; python_version < '3.11'",
+  "Pillow==13.0.0; python_version >= '3.11'",
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"

@@ -310,7 +310,7 @@
     "tsdown": "^0.22.2",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
-    "vite": "8.2.2",
+    "vite": "8.2.4",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.11",
     "@deepseek-ai/dsh-skill-office": "workspace:*",
