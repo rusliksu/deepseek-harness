@@ -25938,8 +25938,8 @@ packages:
   focus-trap@7.8.0:
     resolution: {integrity: sha512-/yNdlIkpWbM0ptxno3ONTuf+2g318kh2ez3KSeZN5dZ8YC6AAmgeWz+GasYYiBJPFaYcSAPeu4GfhUaChzIJXA==}
 
-  follow-redirects@1.16.0:
-    resolution: {integrity: sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==}
+  follow-redirects@1.16.3:
+    resolution: {integrity: sha512-toOSoqN6d51Wjf1aOFJYcoVv1aND9rj/CwjLU0Vz40oDuSpWDayCeKe4JpL5NL0WdFvoOOCI3BRo69HahjbR1A==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -33767,7 +33767,7 @@ snapshots:
     dependencies:
       tabbable: 6.5.0
 
-  follow-redirects@1.16.0(debug@4.4.3(supports-color@9.4.0)):
+  follow-redirects@1.16.3(debug@4.4.3(supports-color@9.4.0)):
     optionalDependencies:
       debug: 4.4.3(supports-color@9.4.0)
 
@@ -34146,7 +34146,7 @@ snapshots:
   http-proxy@1.18.1(debug@4.4.3(supports-color@9.4.0)):
     dependencies:
       eventemitter3: 4.0.7
-      follow-redirects: 1.16.0(debug@4.4.3(supports-color@9.4.0))
+      follow-redirects: 1.16.3(debug@4.4.3(supports-color@9.4.0))
       requires-port: 1.0.0
     transitivePeerDependencies:
       - debug
