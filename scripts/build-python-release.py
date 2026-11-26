@@ -93,6 +93,8 @@ def main() -> None:
         subprocess.run(command, cwd=ROOT, env=None if environment is None else {**os.environ, **environment}, check=True)
     if not expected.is_file():
         raise RuntimeError(f"build did not produce expected wheel: {expected}")
+    recompress_wheel(expected)
+    report_wheel(expected)
     verify_wheel(expected, args.package, wheel_version, None if args.platform is None else PLATFORMS[args.platform])
     print(expected)
 
@@ -289,6 +291,34 @@ def verify_wheel(
             expected_requirement = f"{RUNTIME_DISTRIBUTION}=={version}"
             if expected_requirement not in requirements:
                 raise RuntimeError(f"{wheel} does not pin {expected_requirement}; found {requirements}")
+
+
+def recompress_wheel(wheel: Path) -> None:
+    """Rewrite a wheel at the maximum deflate level.
+
+    The runtime wheel carries the injected executable, which the build backend
+    stores at its default level; the maximum level keeps a platform payload
+    under PyPI's 100000000-byte single-file limit without dropping content.
+    """
+    temporary = wheel.with_name(f"{wheel.name}.tmp")
+    try:
+        with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+            temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=9
+        ) as target:
+            for entry in source.infolist():
+                target.writestr(entry, source.read(entry.filename))
+        temporary.replace(wheel)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def report_wheel(wheel: Path) -> None:
+    """Print the wheel size and its largest members for the build log."""
+    with zipfile.ZipFile(wheel) as archive:
+        members = sorted(archive.infolist(), key=lambda entry: entry.file_size, reverse=True)
+    print(f"build-python-release: {wheel.name} is {wheel.stat().st_size} bytes")
+    for member in members[:5]:
+        print(f"  {member.file_size:>12} {member.compress_size:>12} {member.filename}")
 
 
 if __name__ == "__main__":
