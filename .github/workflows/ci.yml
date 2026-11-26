@@ -1151,3 +1151,5 @@ jobs:
           exit 1
       - name: All checks passed
         run: echo "All needed jobs succeeded (${{ join(needs.*.result, ', ') }})"
+
+# Policy-proof PR: the merge-policy checks must skip in a fork.
