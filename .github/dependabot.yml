@@ -6,6 +6,9 @@ updates:
     exclude-paths:
       # Vendored Cordis sources follow vendor/README.md instead of registry updates.
       - "vendor/**"
+    # One open update per ecosystem: every Dependabot PR starts the whole
+    # pull-request workflow set, and the fork's runner pool is the bottleneck.
+    open-pull-requests-limit: 1
     schedule:
       interval: "cron"
       cronjob: "0 4 * * *"
@@ -18,6 +21,9 @@ updates:
 
   - package-ecosystem: "uv"
     directory: "/python/sdk"
+    # One open update per ecosystem: every Dependabot PR starts the whole
+    # pull-request workflow set, and the fork's runner pool is the bottleneck.
+    open-pull-requests-limit: 1
     schedule:
       interval: "cron"
       cronjob: "0 4 * * *"
@@ -30,6 +36,9 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    # One open update per ecosystem: every Dependabot PR starts the whole
+    # pull-request workflow set, and the fork's runner pool is the bottleneck.
+    open-pull-requests-limit: 1
     schedule:
       interval: "cron"
       cronjob: "0 4 * * *"
