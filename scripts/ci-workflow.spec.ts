@@ -1670,6 +1670,21 @@ describe('Python release workflows', () => {
   })
 })
 
+describe('Fork merge-policy gates', () => {
+  it('skips the Issue policy, Issue lifecycle, and weighted approval jobs in a fork', () => {
+    for (const [file, jobId] of [
+      ['.github/workflows/issue-policy.yml', 'policy'],
+      ['.github/workflows/issue-lifecycle.yml', 'lifecycle'],
+      ['.github/workflows/weighted-approval.yml', 'publish-status'],
+    ] as const) {
+      const job = workflowJob(loadWorkflow(file), jobId)
+      // These jobs read the internal project, require Issue references, or need
+      // approvals a fork cannot supply, so a fork skips them instead of failing.
+      expect(String(job.if), file + ' must skip a fork base repository').toContain('github.event.repository.fork == false')
+    }
+  })
+})
+
 describe('Weighted approval workflow', () => {
   it('publishes from the trusted default branch after pull request and review updates', () => {
     const publisher = loadWorkflow('.github/workflows/weighted-approval.yml')
@@ -1713,7 +1728,8 @@ describe('Weighted approval workflow', () => {
       if: "(github.event_name != 'pull_request_target' || github.event.pull_request.state == 'open') && "
         + "(github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && "
         + "(github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.issue.state == 'open' &&\n"
-        + "  (contains(github.event.comment.body, '/delegate') || contains(github.event.changes.body.from, '/delegate'))))",
+        + "  (contains(github.event.comment.body, '/delegate') || contains(github.event.changes.body.from, '/delegate')))) &&\n"
+        + 'github.event.repository.fork == false',
       name: 'weighted approval publisher',
       'runs-on': 'ubuntu-latest',
       'timeout-minutes': 5,
@@ -1841,7 +1857,7 @@ describe('Issue lifecycle workflow', () => {
     expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
     expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
     expect(preflightStep?.if).toBeUndefined()
-    expect(policyJob.if).toBeUndefined()
+    expect(policyJob.if).toBe('github.event.repository.fork == false')
     expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
 
     expect(tokenStep).toMatchObject({
