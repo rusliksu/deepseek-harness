@@ -1152,6 +1152,10 @@ for line in sys.stdin:
         f"""
 def resolve_bundled_launch_args(mode=None):
     return ({sys.executable!r}, {str(runtime)!r})
+
+
+def apply_search_override(env):
+    return None
 """.strip()
     )
 
