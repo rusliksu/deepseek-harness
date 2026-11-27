@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-[DeepSeek Harness Python SDK](../sdk/README.md) runtime 使用的平台 ripgrep 二进制。
+[DeepSeek Harness Python SDK](../sdk/README.zh.md) runtime 使用的平台 ripgrep 二进制。
 
 请与 `deepseek-harness-runtime-bin` 安装同一版本：
 
