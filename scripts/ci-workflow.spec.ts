@@ -1671,9 +1671,8 @@ describe('Python release workflows', () => {
 })
 
 describe('Fork merge-policy gates', () => {
-  it('skips the Issue policy, Issue lifecycle, and weighted approval jobs in a fork', () => {
+  it('skips the Issue lifecycle and weighted approval jobs in a fork', () => {
     for (const [file, jobId] of [
-      ['.github/workflows/issue-policy.yml', 'policy'],
       ['.github/workflows/issue-lifecycle.yml', 'lifecycle'],
       ['.github/workflows/weighted-approval.yml', 'publish-status'],
     ] as const) {
@@ -1857,7 +1856,9 @@ describe('Issue lifecycle workflow', () => {
     expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
     expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
     expect(preflightStep?.if).toBeUndefined()
-    expect(policyJob.if).toBe('github.event.repository.fork == false')
+    // The required policy check stays unconditional; the repo gate
+    // test:issue-management asserts that no job-level condition can bypass it.
+    expect(policyJob.if).toBeUndefined()
     expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
 
     expect(tokenStep).toMatchObject({
