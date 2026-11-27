@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
-import { IconClockOutlineRegular, IconUsersOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconClockOutlineRegular, IconContextInjectionOutlineRegular, IconUsersOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNode } from '../src/client/contract/chat-nodes.ts'
 import { TurnTriggerNodeView } from '../src/client/chat/TurnTriggerNodeView.tsx'
 import { turnTriggerDetails } from '../src/client/chat/turn-trigger.ts'
@@ -85,6 +85,20 @@ describe('Turn trigger notices', () => {
     expect(view.getByRole('button').querySelector('svg')?.outerHTML)
       .toBe(reference.container.querySelector('svg')?.outerHTML)
     expect(node.data.source).toEqual({ kind: 'schedule' })
+  })
+
+  it.each([
+    { locale: en, title: 'Resumed interrupted task' },
+    { locale: zh, title: '恢复被中断的任务' },
+  ])('labels a recovery notice $title and uses the shared injection glyph', ({ locale, title }) => {
+    const node = trigger({ kind: 'recovery' })
+    expect(turnTriggerDetails(node.data)).toEqual({ title: 'message.trigger.recovery', icon: 'recovery' })
+    const view = render(<TurnTriggerNodeView node={node} t={makeTranslate(locale)} />)
+    expect(view.getByRole('button').textContent).toContain(title)
+    const reference = render(<IconContextInjectionOutlineRegular size={14} />)
+    expect(view.getByRole('button').querySelector('svg')?.outerHTML)
+      .toBe(reference.container.querySelector('svg')?.outerHTML)
+    expect(node.data.source).toEqual({ kind: 'recovery' })
   })
 
   it.each([

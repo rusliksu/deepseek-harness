@@ -2754,6 +2754,9 @@ importers:
       '@deepseek-ai/dsh-session-query-sqlite':
         specifier: workspace:*
         version: link:../../session-query/session-query-sqlite
+      '@deepseek-ai/dsh-session-recovery':
+        specifier: workspace:*
+        version: link:../../session/session-recovery
       '@deepseek-ai/dsh-session-telemetry-otel':
         specifier: workspace:*
         version: link:../../session/session-telemetry-otel
@@ -17121,6 +17124,12 @@ importers:
       '@deepseek-ai/dsh-storage-json':
         specifier: workspace:*
         version: link:../../storage/storage-json
+
+  packages/session/session-recovery:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
 
   packages/session/session-stats:
     dependencies:

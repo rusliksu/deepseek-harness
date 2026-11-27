@@ -84,6 +84,8 @@ export async function harness(options: {
   direct?: true
   sessionController?: false
   config?: Config
+  /** Registered model provider routes the runtime can observe; omit for a Host without an llm service. */
+  llmProviders?: () => { id: string; name: string }[]
 } = {}) {
   const ctx = new Context()
   options.onContext?.(ctx)
@@ -113,6 +115,7 @@ export async function harness(options: {
   if (options.sessionController !== false) {
     ctx.provide('sessionController', { resolveAgent: resolve, create: createSession } as never)
   }
+  if (options.llmProviders !== undefined) ctx.provide('llm', { listProviders: options.llmProviders } as never)
   const flush = vi.fn(async () => {})
   ctx.on('session/flush', flush)
   ctx.provide('sessionPersistence', { stat } as never)

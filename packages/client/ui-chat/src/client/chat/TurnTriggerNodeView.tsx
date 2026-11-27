@@ -24,6 +24,7 @@ const TRIGGER_ICONS: Record<TurnTriggerIcon, ComponentType<IconProps>> = {
   schedule: IconClockOutlineRegular,
   job: IconQueueOutlineRegular,
   plugin: IconCordisPluginOutlineRegular,
+  recovery: IconContextInjectionOutlineRegular,
 }
 
 /** Render recorded trigger attribution above the whole-Turn disclosure. */

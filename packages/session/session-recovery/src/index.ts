@@ -1,0 +1,12 @@
+/** Recovery service plugin entry. */
+export { default } from './service.ts'
+export type { Config } from './service.ts'
+export type * from './unit.ts'
+export type * from './ledger.ts'
+export type * from './tables.ts'
+export type * from './file-store.ts'
+export type * from './candidates.ts'
+export type * from './inject.ts'
+export type * from './policy.ts'
+export type * from './runtime.ts'
+export type * from './composition.ts'
