@@ -608,18 +608,28 @@ class HarnessClient:
         return "\n".join(parts)
 
     def _default_launch_args(self, env: dict[str, str]) -> tuple[str, ...]:
-        if self.config.dsh_bin is None:
-            try:
-                from deepseek_harness_runtime import apply_search_override, resolve_bundled_launch_args
-            except ImportError as exc:
+        try:
+            from deepseek_harness_runtime import apply_search_override, resolve_bundled_launch_args
+        except ImportError as exc:
+            if self.config.dsh_bin is None:
                 raise FileNotFoundError(
                     "Unable to locate the bundled DeepSeek Harness dsh runtime. "
                     "Install deepseek-harness-runtime-bin."
                 ) from exc
+            # An explicit binary needs no bundled runtime package; it resolves its own
+            # tools, so no search override applies.
+            apply_search_override = None
+            resolve_bundled_launch_args = None
+        if self.config.dsh_bin is None:
+            assert resolve_bundled_launch_args is not None
             base = resolve_bundled_launch_args()
+            assert apply_search_override is not None
             apply_search_override(env)
         else:
             base = (str(Path(self.config.dsh_bin).expanduser().resolve()),)
+            if apply_search_override is not None:
+                # Applies only when the explicit path is this package's bundled runtime.
+                apply_search_override(env, base[0])
 
         if self.config.dsh_home is not None:
             if not self.config.dsh_home.strip():

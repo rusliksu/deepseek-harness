@@ -200,6 +200,7 @@ def test_search_override_uses_the_installed_search_wheel(
         f"    return Path({str(binary)!r})\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "deepseek_harness_search", raising=False)
 
     assert runtime.search_ripgrep_path() == binary
     env: dict[str, str] = {}
@@ -211,6 +212,40 @@ def test_search_override_defers_to_an_explicit_binary() -> None:
     env = {"DSH_RIPGREP_PATH": "/usr/local/bin/rg"}
     runtime.apply_search_override(env)
     assert env == {"DSH_RIPGREP_PATH": "/usr/local/bin/rg"}
+
+
+def _install_search_package(root: Path) -> Path:
+    package = root / "deepseek_harness_search"
+    (package / "bin").mkdir(parents=True)
+    binary = package / "bin" / ("rg.exe" if sys.platform == "win32" else "rg")
+    binary.write_text("")
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n\n\ndef ripgrep_path() -> Path:\n"
+        f"    return Path({str(binary)!r})\n"
+    )
+    return binary
+
+
+def test_search_override_applies_only_to_the_bundled_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = _install_search_package(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "deepseek_harness_search", raising=False)
+    bundled = tmp_path / "runtime" / "deepseek-harness-sdk-runtime-linux-x64"
+    bundled.parent.mkdir()
+    bundled.touch()
+    monkeypatch.setattr(runtime, "bundled_runtime_path", lambda: bundled)
+    foreign = tmp_path / "other" / "dsh"
+    foreign.parent.mkdir()
+    foreign.touch()
+
+    env: dict[str, str] = {}
+    runtime.apply_search_override(env, str(foreign))
+    assert env == {}
+
+    runtime.apply_search_override(env, str(bundled))
+    assert env == {"DSH_RIPGREP_PATH": str(binary)}
 
 
 def test_runtime_requires_complete_resource_sidecars(
