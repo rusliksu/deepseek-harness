@@ -9,6 +9,14 @@ updates:
     # One open update per ecosystem: every Dependabot PR starts the whole
     # pull-request workflow set, and the fork's runner pool is the bottleneck.
     open-pull-requests-limit: 1
+    # Group every update of an ecosystem into one pull request: Dependabot
+    # evaluates open-pull-requests-limit per job, and a scheduled fan-out can
+    # create several PRs before the count catches up. A single group keeps the
+    # fork at most one PR per ecosystem.
+    groups:
+      all:
+        patterns:
+          - "*"
     schedule:
       interval: "cron"
       cronjob: "0 4 * * *"
@@ -24,6 +32,14 @@ updates:
     # One open update per ecosystem: every Dependabot PR starts the whole
     # pull-request workflow set, and the fork's runner pool is the bottleneck.
     open-pull-requests-limit: 1
+    # Group every update of an ecosystem into one pull request: Dependabot
+    # evaluates open-pull-requests-limit per job, and a scheduled fan-out can
+    # create several PRs before the count catches up. A single group keeps the
+    # fork at most one PR per ecosystem.
+    groups:
+      all:
+        patterns:
+          - "*"
     schedule:
       interval: "cron"
       cronjob: "0 4 * * *"
@@ -39,6 +55,14 @@ updates:
     # One open update per ecosystem: every Dependabot PR starts the whole
     # pull-request workflow set, and the fork's runner pool is the bottleneck.
     open-pull-requests-limit: 1
+    # Group every update of an ecosystem into one pull request: Dependabot
+    # evaluates open-pull-requests-limit per job, and a scheduled fan-out can
+    # create several PRs before the count catches up. A single group keeps the
+    # fork at most one PR per ecosystem.
+    groups:
+      all:
+        patterns:
+          - "*"
     schedule:
       interval: "cron"
       cronjob: "0 4 * * *"
