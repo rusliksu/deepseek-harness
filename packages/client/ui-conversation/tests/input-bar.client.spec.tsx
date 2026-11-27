@@ -1164,7 +1164,7 @@ describe('Enter semantics', () => {
     expect(shell.snapshot.draft).toBe('hxello')
   })
 
-  it('composition Enter never sends: ref guard, isComposing, and keyCode 229 paths', () => {
+  it('composition Enter never sends, while a bare keycode 229 without a composition does', () => {
     vi.useFakeTimers()
     try {
       const { textarea, sink } = bench({ draft: 'hello' })
@@ -1176,9 +1176,9 @@ describe('Enter semantics', () => {
       fireEvent.keyDown(textarea, { key: 'Enter' })
       expect(sink).not.toHaveBeenCalled()
       vi.advanceTimersByTime(20)
+      // Android soft keyboards report 229 for every key; outside a composition
+      // that Enter is ordinary and must send.
       fireEvent.keyDown(textarea, { key: 'Enter', keyCode: 229 })
-      expect(sink).not.toHaveBeenCalled()
-      fireEvent.keyDown(textarea, { key: 'Enter' })
       expect(sink).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()

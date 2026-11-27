@@ -7,7 +7,7 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { fireEvent } from '@testing-library/react'
 import type { LexicalEditor } from 'lexical'
-import { $createParagraphNode, $createTextNode, $getRoot, $getSelection, $isRangeSelection, createEditor } from 'lexical'
+import { $createParagraphNode, $createTextNode, $getRoot, $getSelection, $isRangeSelection, CONTROLLED_TEXT_INSERTION_COMMAND, createEditor } from 'lexical'
 import { registerPlainText } from '@lexical/plain-text'
 import { registerComposerKeymap } from '../src/client/input/editor/keymap.ts'
 import { $createQuoteNode, QuoteNode } from '../src/client/input/editor/QuoteNode.tsx'
@@ -67,6 +67,53 @@ describe('keymap keydown routing', () => {
     expect(submit).toHaveBeenCalledWith(false)
     fireEvent.keyDown(root, { key: 'Enter', metaKey: true })
     expect(submit).toHaveBeenCalledWith(true)
+  })
+
+  it('submits on an Enter a mobile keyboard reports as keycode 229 without a composition', () => {
+    const editor = createEditor({ namespace: 'keycode-229', onError: (e) => { throw e } })
+    const root = document.createElement('div')
+    root.contentEditable = 'true'
+    document.body.appendChild(root)
+    editor.setRootElement(root)
+    onTestFinished(() => { editor.setRootElement(null); root.remove() })
+    onTestFinished(registerPlainText(editor))
+    const submit = vi.fn()
+    onTestFinished(registerComposerKeymap(editor, {
+      arbitrate: () => 'pass',
+      space: () => false,
+      dismissPopup: () => {}, recallHistory: () => false,
+      canSubmit: () => true,
+      submit,
+      intakeFiles: () => {},
+      pasteText: () => {},
+    }))
+    // Android soft keyboards report 229 for every key; no composition owns this Enter.
+    fireEvent.keyDown(root, { key: 'Enter', keyCode: 229 })
+    expect(submit).toHaveBeenCalledWith(false)
+  })
+
+  it('routes a multi-line controlled insertion payload through the sanitized paste path', () => {
+    const editor = createEditor({ namespace: 'insert-text-paste', onError: (e) => { throw e } })
+    const root = document.createElement('div')
+    root.contentEditable = 'true'
+    document.body.appendChild(root)
+    editor.setRootElement(root)
+    onTestFinished(() => { editor.setRootElement(null); root.remove() })
+    onTestFinished(registerPlainText(editor))
+    const pasteText = vi.fn()
+    onTestFinished(registerComposerKeymap(editor, {
+      arbitrate: () => 'pass',
+      space: () => false,
+      dismissPopup: () => {}, recallHistory: () => false,
+      canSubmit: () => true,
+      submit: () => {},
+      intakeFiles: () => {},
+      pasteText,
+    }))
+    editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, 'one\ntwo')
+    expect(pasteText).toHaveBeenCalledWith('one\ntwo')
+    editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, 'plain')
+    expect(pasteText).toHaveBeenCalledTimes(1)
   })
 
   it.each([
@@ -204,7 +251,9 @@ describe('keymap keydown routing', () => {
       { platform: 'MacIntel', init: { key: 'End', metaKey: true } },
       { platform: 'MacIntel', init: { key: 'Home', ctrlKey: true } },
       { platform: 'MacIntel', init: { key: 'End', altKey: true } },
-      { platform: 'MacIntel', init: { key: 'Home', keyCode: 229 } },
+      // A real IME composition owns the key; keycode 229 alone no longer does,
+      // because Android keyboards report it for ordinary keys too.
+      { platform: 'MacIntel', init: { key: 'Home', isComposing: true } },
       { platform: 'MacIntel', init: { key: 'ArrowLeft' } },
     ])('leaves $init on $platform to the browser', ({ platform, init }) => {
       const { root, modify } = lineBoundaryBench(platform)

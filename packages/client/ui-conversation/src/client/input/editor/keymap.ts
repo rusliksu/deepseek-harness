@@ -19,7 +19,7 @@ import type { LexicalEditor } from 'lexical'
 import {
   $createRangeSelectionFromDom, $getAdjacentNode, $getSelection, $isElementNode, $isLineBreakNode, $isRangeSelection, $isTextNode,
   KEY_DOWN_COMMAND, MOVE_TO_END,
-  COMMAND_PRIORITY_CRITICAL, KEY_ARROW_DOWN_COMMAND, KEY_ARROW_UP_COMMAND, KEY_ENTER_COMMAND,
+  COMMAND_PRIORITY_CRITICAL, CONTROLLED_TEXT_INSERTION_COMMAND, KEY_ARROW_DOWN_COMMAND, KEY_ARROW_UP_COMMAND, KEY_ENTER_COMMAND,
   KEY_ESCAPE_COMMAND, KEY_SPACE_COMMAND, KEY_TAB_COMMAND, PASTE_COMMAND,
 } from 'lexical'
 import { mergeRegister } from '@lexical/utils'
@@ -52,11 +52,17 @@ export interface ComposerKeymapHandlers {
   pasteText(text: string): void
 }
 
-/** Composition state a keydown can trust (see the module doc's Safari note). */
+/**
+ * Composition state a keydown can trust (see the module doc's Safari note).
+ *
+ * Keycode 229 alone is not a signal: Android soft keyboards report it for every
+ * key, including a plain Enter that no composition owns, and trusting it there
+ * swallowed that Enter. A composition that is actually open, the engine's own
+ * `isComposing` flag, and the closing window after `compositionend` cover the
+ * IME cases the guard exists for.
+ */
 function isComposingEvent(event: KeyboardEvent, recentlyComposing: () => boolean): boolean {
-  // keyCode 229 is the legacy IME-composition signal engines emit without isComposing.
-  // oxlint-disable-next-line typescript/no-deprecated
-  return event.isComposing || event.keyCode === 229 || recentlyComposing()
+  return event.isComposing || recentlyComposing()
 }
 
 function isApplePlatform(): boolean {
@@ -357,6 +363,16 @@ export function registerComposerKeymap(editor: LexicalEditor, handlers: Composer
       }
       event.preventDefault()
       handlers.pasteText(text)
+      return true
+    }, COMMAND_PRIORITY_CRITICAL),
+    editor.registerCommand(CONTROLLED_TEXT_INSERTION_COMMAND, (payload) => {
+      // Mobile keyboards route a clipboard paste through `insertText` instead of
+      // the paste command, and Lexical delivers that as this command; raw newlines
+      // there collapse into the first line. Send a multi-line or
+      // placeholder-bearing string through the sanitized path and leave ordinary
+      // character insertion, plus event payloads, to the plain-text handler.
+      if (typeof payload !== 'string' || !/[\n\r\uE100-\uE11D\uFFFC]/u.test(payload)) return false
+      handlers.pasteText(payload)
       return true
     }, COMMAND_PRIORITY_CRITICAL),
   )
