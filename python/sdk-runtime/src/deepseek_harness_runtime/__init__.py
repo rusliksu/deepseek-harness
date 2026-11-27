@@ -127,10 +127,23 @@ def search_ripgrep_path() -> Path | None:
     return ripgrep_path()
 
 
-def apply_search_override(env: MutableMapping[str, str]) -> None:
-    """Point the runtime at the installed search wheel unless the caller chose a binary."""
+def apply_search_override(env: MutableMapping[str, str], executable: str | None = None) -> None:
+    """Point the runtime at the installed search wheel unless the caller chose a binary.
+
+    @param env - environment the runtime will receive; an existing DSH_RIPGREP_PATH wins.
+    @param executable - absolute path the launch will use. When given, the override
+    applies only if it is this package's bundled runtime, because another binary
+    ships and resolves its own ripgrep.
+    """
     if env.get("DSH_RIPGREP_PATH"):
         return
+    if executable is not None:
+        try:
+            bundled = bundled_runtime_path()
+        except FileNotFoundError:
+            return
+        if Path(executable).resolve() != Path(bundled).resolve():
+            return
     path = search_ripgrep_path()
     if path is not None:
         env["DSH_RIPGREP_PATH"] = str(path)

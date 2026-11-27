@@ -1154,7 +1154,7 @@ def resolve_bundled_launch_args(mode=None):
     return ({sys.executable!r}, {str(runtime)!r})
 
 
-def apply_search_override(env):
+def apply_search_override(env, executable=None):
     return None
 """.strip()
     )
