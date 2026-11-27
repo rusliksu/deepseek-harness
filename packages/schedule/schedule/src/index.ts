@@ -94,6 +94,14 @@ export interface Config {
    * creates a Session at every delivery; omission defaults to 60. Timed and manual deliveries both wait for it.
    */
   newSessionIntervalSeconds?: number
+  /**
+   * Whether the age bound applies to an occurrence missed while the host was not running; omission defaults to false.
+   */
+  catchUpEnabled?: boolean
+  /**
+   * Oldest missed occurrence, in hours, that catch-up still delivers; omission defaults to 24.
+   */
+  catchUpMaxStaleHours?: number
 }
 
 /** Retained delivery-history window applied when the deployment states none. */
@@ -104,6 +112,17 @@ const DEFAULT_DELIVERY_HISTORY_RECORDS = 200
 
 /** Spacing between Session-creating deliveries of one task applied when the deployment states none. */
 const DEFAULT_NEW_SESSION_INTERVAL_SECONDS = 60
+
+/**
+ * Catch-up delivery applied when the deployment states nothing.
+ *
+ * The deployment enables the bound once the host can prove a downtime window;
+ * without that evidence an old occurrence is treated as overdue by design.
+ */
+const DEFAULT_CATCH_UP_ENABLED = false
+
+/** Oldest missed occurrence catch-up still delivers when the deployment states none. */
+const DEFAULT_CATCH_UP_MAX_STALE_HOURS = 24
 
 /** Page size of a task list request that states none. */
 export const DEFAULT_LIST_LIMIT = 100
@@ -265,6 +284,13 @@ export class ScheduleService extends TypertRemoteService {
         records: config.deliveryHistoryRecords ?? DEFAULT_DELIVERY_HISTORY_RECORDS,
       },
       newSessionIntervalMs: (config.newSessionIntervalSeconds ?? DEFAULT_NEW_SESSION_INTERVAL_SECONDS) * 1_000,
+      catchUp: {
+        enabled: config.catchUpEnabled ?? DEFAULT_CATCH_UP_ENABLED,
+        maxStaleHours: config.catchUpMaxStaleHours ?? DEFAULT_CATCH_UP_MAX_STALE_HOURS,
+        // Time origin is the process or worker start, so an occurrence earlier than it
+        // was missed while this host was not running.
+        bootTimeMs: performance.timeOrigin,
+      },
     }
     this.ready = ctx.storageDomain.open(scheduleDomain).then(async (domain) => {
       try {

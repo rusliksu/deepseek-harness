@@ -57,6 +57,10 @@
     - id: remote-access
       name: '@deepseek-ai/dsh-api-remote-access'
 
+    - id: session-recovery
+      name: '@deepseek-ai/dsh-session-recovery'
+      config:
+        enabled: false
     - id: session-title
       name: '@deepseek-ai/dsh-session-title'
       config:

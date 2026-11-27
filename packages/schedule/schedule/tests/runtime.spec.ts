@@ -4,7 +4,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { MessageId } from '@deepseek-ai/dsh-llm/types'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
-import { ScheduleRuntime, MAX_TIMER_DELAY_MS } from '../src/runtime.ts'
+import { ScheduleRuntime, MAX_TIMER_DELAY_MS, type ScheduleRuntimeLimits } from '../src/runtime.ts'
 import {
   createAfterScheduleRecord,
   createAtScheduleRecord,
@@ -19,14 +19,18 @@ import { agentFor, boundTask, harness } from './harness.ts'
 const tests: Awaited<ReturnType<typeof harness>>[] = []
 const runtimes: ScheduleRuntime[] = []
 const ORIGINAL = brandString<SessionId>('original')
-const LIMITS = { retention: { days: 30, records: 200 }, newSessionIntervalMs: 3_600_000 }
+const LIMITS: ScheduleRuntimeLimits = {
+  retention: { days: 30, records: 200 },
+  newSessionIntervalMs: 3_600_000,
+  catchUp: { enabled: false, maxStaleHours: 24 },
+}
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-16T00:00:00Z')) })
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map(runtime => runtime.dispose()))
   await Promise.all(tests.splice(0).map(test => test.ctx.fiber.dispose()))
   vi.useRealTimers()
 })
-async function setup(tasks: ScheduleTask[], options: Parameters<typeof harness>[0] = {}) {
+async function setup(tasks: ScheduleTask[], options: Parameters<typeof harness>[0] = {}, limits = LIMITS) {
   const test = await harness(options); tests.push(test)
   const agent = agentFor(test.ctx)
   test.resolve.mockResolvedValue({ agent })
@@ -35,7 +39,7 @@ async function setup(tasks: ScheduleTask[], options: Parameters<typeof harness>[
     tasks[index] = task
   })
   const changed = vi.fn<() => void>()
-  const runtime = new ScheduleRuntime(test.ctx, () => tasks, work => work(), commit, changed, LIMITS, test.resolveAgent)
+  const runtime = new ScheduleRuntime(test.ctx, () => tasks, work => work(), commit, changed, limits, test.resolveAgent)
   runtimes.push(runtime)
   return { ...test, agent, followup: agent.followup, runtime, commit, changed }
 }
@@ -738,5 +742,142 @@ describe('Schedule dispatch failures and concurrent changes', () => {
     transaction.reject(new Error('domain closed'))
     await stopped
     expect(test.resolve).not.toHaveBeenCalled()
+  })
+})
+
+describe('downtime catch-up bound', () => {
+  const limits = (bootTimeMs: number) => ({
+    ...LIMITS,
+    catchUp: { enabled: true, maxStaleHours: 24, bootTimeMs },
+  })
+
+  it('drops an occurrence that predates the boot by more than the bound', async () => {
+    const stale = new Date(Date.now() - 30 * 3_600_000).toISOString()
+    const record = { ...createEveryScheduleRecord(brandString<ScheduleId>('stale-every'), 'Late', 172_800, Date.now(), 'Late'), scheduledAt: stale }
+    const tasks = [boundTask(ORIGINAL, record)]
+    const test = await setup(tasks, {}, limits(Date.now() - 2 * 3_600_000))
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(test.followup).not.toHaveBeenCalled()
+    expect(tasks[0]?.status).toBe('active')
+    expect(Date.parse(tasks[0]!.record.scheduledAt)).toBeGreaterThan(Date.now())
+    expect(tasks[0]?.lastDelivery).toBeUndefined()
+  })
+
+  it('delivers an occurrence that predates the boot but stays inside the bound', async () => {
+    const recent = new Date(Date.now() - 3 * 3_600_000).toISOString()
+    const record = { ...createEveryScheduleRecord(brandString<ScheduleId>('recent-every'), 'Late', 172_800, Date.now(), 'Late'), scheduledAt: recent }
+    const tasks = [boundTask(ORIGINAL, record)]
+    const test = await setup(tasks, {}, limits(Date.now() - 2 * 3_600_000))
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(test.followup).toHaveBeenCalledOnce()
+    expect(tasks[0]?.lastDelivery).toBeDefined()
+    expect(JSON.stringify(test.followup.mock.calls[0]?.[0])).toContain('[SCHEDULE CATCH-UP]')
+  })
+
+  it('ends a one-shot task whose missed occurrence predates the boot past the bound', async () => {
+    const stale = new Date(Date.now() - 30 * 3_600_000).toISOString()
+    const record = { ...createAfterScheduleRecord(brandString<ScheduleId>('stale-after'), 'Late', 2, Date.now(), 'Late'), scheduledAt: stale }
+    const tasks = [boundTask(ORIGINAL, record)]
+    const test = await setup(tasks, {}, limits(Date.now() - 2 * 3_600_000))
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(test.followup).not.toHaveBeenCalled()
+    expect(tasks[0]?.status).toBe('ended')
+    expect(tasks[0]?.record.scheduledAt).toBe(stale)
+  })
+
+  it('advances a dropped occurrence of a task without an update stamp', async () => {
+    const stale = new Date(Date.now() - 30 * 3_600_000).toISOString()
+    const record = { ...createAfterScheduleRecord(brandString<ScheduleId>('stale-plain'), 'Late', 2, Date.now(), 'Late'), scheduledAt: stale }
+    const { updatedAt: _ignored, ...plain } = boundTask(ORIGINAL, record)
+    const tasks = [plain]
+    const test = await setup(tasks, {}, limits(Date.now() - 2 * 3_600_000))
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(test.followup).not.toHaveBeenCalled()
+    expect(tasks[0]?.status).toBe('ended')
+  })
+})
+
+describe('occurrence deduplication', () => {
+  it('advances past an occurrence the task already delivered', async () => {
+    const due = new Date(Date.now() - 3_600_000).toISOString()
+    const record = { ...createEveryScheduleRecord(brandString<ScheduleId>('delivered-every'), 'Again', 172_800, Date.now(), 'Again'), scheduledAt: due }
+    const receipt = {
+      scheduledAt: due,
+      deliveredAt: due,
+      messageId: brandString<MessageId>('already-delivered'),
+      targetSessionId: ORIGINAL,
+    }
+    const tasks = [boundTask(ORIGINAL, record, {
+      lastDelivery: receipt,
+      deliveryHistory: { records: [{ ...receipt, prompt: 'Again' }], earlierRecordsUnavailable: false, earlierRecordsPruned: false },
+    })]
+    const test = await setup(tasks)
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(test.followup).not.toHaveBeenCalled()
+    expect(Date.parse(tasks[0]!.record.scheduledAt)).toBeGreaterThan(Date.parse(due))
+    expect(tasks[0]?.lastDelivery).toEqual(receipt)
+  })
+})
+
+describe('catch-up announcement', () => {
+  it('stays silent when the occurrence does not predate the boot', async () => {
+    const recent = new Date(Date.now() - 30 * 60_000).toISOString()
+    const record = { ...createEveryScheduleRecord(brandString<ScheduleId>('silent-every'), 'Keep', 172_800, Date.now(), 'Keep'), scheduledAt: recent }
+    const tasks = [boundTask(ORIGINAL, record)]
+    const test = await setup(tasks, {}, {
+      ...LIMITS,
+      catchUp: { enabled: true, maxStaleHours: 24, bootTimeMs: Date.now() - 2 * 3_600_000 },
+    })
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(test.followup).toHaveBeenCalledOnce()
+    expect(JSON.stringify(test.followup.mock.calls[0]?.[0])).not.toContain('[SCHEDULE CATCH-UP]')
+  })
+})
+
+describe('provider registration wait', () => {
+  const waiting = { ...LIMITS, providerWait: { limitMs: 5_000, pollMs: 1_000 } }
+  const due = () => ({ ...createEveryScheduleRecord(brandString<ScheduleId>('wait-every'), 'Wake', 172_800, Date.now(), 'Wake'), scheduledAt: new Date(Date.now() - 60_000).toISOString() })
+  const withProvider = (test: { agent: Agent }, provider: string) => {
+    const stub: Agent = Object.create(test.agent) as Agent
+    Object.defineProperty(stub, 'model', { value: { current: () => ({ provider, model: 'm' }) } })
+    return stub
+  }
+
+  it('delivers once the provider registers inside the wait', async () => {
+    const tasks = [boundTask(ORIGINAL, due())]
+    const registeredAt = Date.now() + 1_000
+    const test = await setup(tasks, { llmProviders: () => Date.now() >= registeredAt ? [{ id: 'route', name: 'Route' }] : [] }, waiting)
+    const current = withProvider(test, 'route')
+    test.resolve.mockResolvedValue({ agent: current })
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(test.followup).toHaveBeenCalledOnce()
+    expect(tasks[0]?.lastDelivery).toBeDefined()
+  })
+
+  it('refuses the delivery when the provider never registers', async () => {
+    const tasks = [boundTask(ORIGINAL, due())]
+    const test = await setup(tasks, { llmProviders: () => [] }, waiting)
+    test.resolve.mockResolvedValue({ agent: withProvider(test, 'route') })
+    const warn = vi.spyOn(test.ctx.logger, 'warn')
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(test.followup).not.toHaveBeenCalled()
+    expect(tasks[0]?.lastDelivery).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('were not acknowledged'))
+  })
+
+  it('delivers without waiting when the Agent exposes no model route', async () => {
+    const tasks = [boundTask(ORIGINAL, due())]
+    const test = await setup(tasks, { llmProviders: () => [] }, waiting)
+    test.runtime.requestDrive()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(test.followup).toHaveBeenCalledOnce()
   })
 })

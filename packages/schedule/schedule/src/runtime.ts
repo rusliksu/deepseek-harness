@@ -22,6 +22,7 @@ import {
 } from './domain.ts'
 import { formatScheduleLocalTime } from './domain.ts'
 import { appendDelivery } from './delivery-history.ts'
+import { resolveCatchUp, waitForModelProvider } from './catch-up.ts'
 import type { ScheduleTask } from './storage.ts'
 import type { DeliveryRetentionBounds, ScheduleDeliveryReceipt, ScheduleId, ScheduleSessionCreateSpec } from './types.ts'
 
@@ -37,6 +38,22 @@ export interface ScheduleRuntimeLimits {
   readonly retention: DeliveryRetentionBounds
   /** Delivery floor interval of one task whose every delivery creates a Session. */
   readonly newSessionIntervalMs: number
+  /** Whether and how long a missed occurrence is still delivered after downtime; omitted when the deployment has no policy. */
+  readonly catchUp?: {
+    /** Whether catch-up delivery is enabled. */
+    readonly enabled: boolean
+    /** Oldest missed occurrence, in hours, that is still delivered. */
+    readonly maxStaleHours: number
+    /** Operating-system boot time in milliseconds; omitted when the host cannot report it. */
+    readonly bootTimeMs?: number
+  }
+  /** Wait policy applied when the target Session's model provider is not registered yet. */
+  readonly providerWait?: {
+    /** Longest wait before the delivery is refused. */
+    readonly limitMs: number
+    /** Delay between two probes. */
+    readonly pollMs: number
+  }
 }
 
 /** Target Session of one delivery and its live Agent. */
@@ -247,6 +264,7 @@ export class ScheduleRuntime {
       if (first === undefined) return []
       const target = await this.resolveTarget(first)
       if (this.stopping) return []
+      await this.waitForProvider(target.agent)
       const now = Date.now()
       // Session restoration can span a wall-clock rollback; future members keep their timer obligation.
       admitted = admitted.filter(member => Date.parse(member.record.scheduledAt) <= now)
@@ -254,17 +272,45 @@ export class ScheduleRuntime {
         task, occurrence: isRecurringScheduleRecord(task.record)
           ? resolveRecurringOccurrence(task.record, now) : { occurrenceAt: task.record.scheduledAt },
       }))
-      const single = deliveries[0]
+      const kept: typeof deliveries = []
+      for (const delivery of deliveries) {
+        const occurrenceAt = Date.parse(delivery.occurrence.occurrenceAt)
+        const delivered = [
+          ...delivery.task.deliveryHistory.records.map(record => record.scheduledAt),
+          ...delivery.task.lastDelivery === undefined ? [] : [delivery.task.lastDelivery.scheduledAt],
+        ]
+        if (delivered.some(scheduledAt => Date.parse(scheduledAt) === occurrenceAt)) {
+          await this.commit(this.skipped(delivery.task, delivery.occurrence))
+          committed.add(delivery.task.record.id)
+          this.ctx.logger.info(`schedule: duplicate occurrence ${delivery.occurrence.occurrenceAt} of ${delivery.task.record.id}`)
+          continue
+        }
+        const catchUp = this.limits.catchUp
+        const bootTimeMs = catchUp?.bootTimeMs
+        const decision = resolveCatchUp({
+          scheduledAt: occurrenceAt,
+          now,
+          enabled: catchUp?.enabled ?? false,
+          maxStaleHours: catchUp?.maxStaleHours ?? 0,
+          ...bootTimeMs === undefined ? {} : { bootTimeMs },
+        })
+        if (decision.kind === 'deliver') { kept.push(delivery); continue }
+        await this.commit(this.skipped(delivery.task, delivery.occurrence))
+        committed.add(delivery.task.record.id)
+        this.ctx.logger.info(`schedule: skipped ${decision.reason} occurrence ${delivery.occurrence.occurrenceAt} of ${delivery.task.record.id}`)
+      }
+      const single = kept[0]
       if (single === undefined) return []
       const text = batch
-        ? renderRecurringReminderBatchFraming(deliveries.map(({ task, occurrence }) => ({
+        ? renderRecurringReminderBatchFraming(kept.map(({ task, occurrence }) => ({
           record: task.record, occurrenceAt: occurrence.occurrenceAt,
         })))
         : renderReminderFraming({ ...single.task.record, scheduledAt: single.occurrence.occurrenceAt })
-      const held = deliveries.filter(({ task }) => task.target.kind !== 'new').map(({ task }) => task.record.id)
-      const sent = await this.send(target.agent, text, held)
+      const held = kept.filter(({ task }) => task.target.kind !== 'new').map(({ task }) => task.record.id)
+      const announced = this.lateDeliveryAnnouncement(kept)
+      const sent = await this.send(target.agent, announced === undefined ? text : `${text}\n${announced}`, held)
       try {
-        for (const { task, occurrence } of deliveries) {
+        for (const { task, occurrence } of kept) {
           await this.commit(this.advanced(task, occurrence, {
             scheduledAt: occurrence.occurrenceAt, deliveredAt: sent.deliveredAt, messageId: sent.messageId,
             targetSessionId: target.sessionId,
@@ -402,6 +448,76 @@ export class ScheduleRuntime {
       )).toISOString(),
       pendingDelivery: undefined,
       ...appendDelivery(task, receipt, this.limits.retention),
+    }
+  }
+
+  /**
+   * Wait until the target Session's model provider is registered.
+   * @param agent - Target Agent.
+   * @throws Error when the provider is still missing after the configured wait.
+   */
+  private async waitForProvider(agent: Agent): Promise<void> {
+    const wait = this.limits.providerWait
+    if (wait === undefined) return
+    let provider: string | undefined
+    try {
+      provider = agent.model.current()?.provider
+    } catch {
+      // An Agent whose selection cannot be read names no route to wait for.
+      provider = undefined
+    }
+    if (provider === undefined) return
+    const ready = await waitForModelProvider({
+      provider,
+      registered: () => {
+        const llm = this.ctx.get('llm')
+        return llm !== undefined && llm.listProviders().some(entry => entry.id === provider)
+      },
+      now: () => Date.now(),
+      sleep: async (ms) => {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, ms)
+          timer.unref()
+        })
+      },
+      limitMs: wait.limitMs,
+      pollMs: wait.pollMs,
+    })
+    if (!ready) throw new Error(`schedule: model provider "${provider}" is not registered`)
+  }
+
+  /**
+   * Announce deliveries that were caught up after downtime, so the model knows the planned time
+   * has already passed and can skip work whose window closed.
+   * @param kept - Deliveries this pass accepted.
+   * @returns One model-facing line, or undefined when nothing was late.
+   */
+  private lateDeliveryAnnouncement(kept: readonly { readonly occurrence: RecurringOccurrence }[]): string | undefined {
+    const catchUp = this.limits.catchUp
+    const bootTimeMs = catchUp?.bootTimeMs
+    if (catchUp?.enabled !== true || bootTimeMs === undefined) return undefined
+    const late = kept.filter(({ occurrence }) => Date.parse(occurrence.occurrenceAt) <= bootTimeMs)
+    if (late.length === 0) return undefined
+    const planned = late.map(({ occurrence }) => occurrence.occurrenceAt).sort().join(', ')
+    return `[SCHEDULE CATCH-UP] Planned occurrence ${planned} was missed while the host was not running; this delivery is a catch-up.`
+  }
+
+  /**
+   * Advance a rule past one occurrence that catch-up dropped, without recording a delivery.
+   * @param task - Task whose occurrence was dropped.
+   * @param occurrence - Dropped occurrence and its successor anchor.
+   * @returns Task with the rule moved to its next target and no delivery receipt.
+   */
+  private skipped(task: ScheduleTask, occurrence: RecurringOccurrence): ScheduleTask {
+    const scheduledAt = occurrence.nextScheduledAt ?? occurrence.occurrenceAt
+    return {
+      ...task,
+      record: { ...task.record, scheduledAt },
+      status: occurrence.nextScheduledAt === undefined ? 'ended' : 'active',
+      updatedAt: new Date(Math.max(
+        Date.parse(occurrence.occurrenceAt),
+        task.updatedAt === undefined ? 0 : Date.parse(task.updatedAt) + 1,
+      )).toISOString(),
     }
   }
 

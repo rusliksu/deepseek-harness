@@ -3,7 +3,7 @@ import type { ContextMessageNode } from '../contract/snapshot.ts'
 import type { ChatKey } from '../locale.ts'
 
 /** Existing primitive glyph selected for a Turn trigger's source family. */
-export type TurnTriggerIcon = 'agent' | 'continue' | 'github' | 'goal' | 'job' | 'plugin' | 'request' | 'schedule' | 'subagent' | 'team' | 'webhook'
+export type TurnTriggerIcon = 'agent' | 'continue' | 'github' | 'goal' | 'job' | 'plugin' | 'recovery' | 'request' | 'schedule' | 'subagent' | 'team' | 'webhook'
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -71,6 +71,10 @@ export function turnTriggerDetails(node: ContextMessageNode): {
     case 'schedule':
       title = 'message.trigger.schedule'
       icon = 'schedule'
+      break
+    case 'recovery':
+      title = 'message.trigger.recovery'
+      icon = 'recovery'
       break
     case 'tool-jobs':
       title = 'message.trigger.job'

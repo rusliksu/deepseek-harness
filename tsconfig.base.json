@@ -179,6 +179,7 @@
       "@deepseek-ai/dsh-session/fork": ["./packages/core/session/src/fork.ts"],
       "@deepseek-ai/dsh-session-query/types": ["./packages/session-query/session-query/src/types.ts"],
       "@deepseek-ai/dsh-session-projection/types": ["./packages/session/session-projection/src/types.ts"],
+    "@deepseek-ai/dsh-session-recovery": ["./packages/session/session-recovery/src/index.ts"],
       "@deepseek-ai/dsh-tool-todo/types": ["./packages/todo/tool-todo/src/types.ts"],
       "@deepseek-ai/dsh-tool-todo/client": ["./packages/todo/tool-todo/src/client.ts"],
       "@deepseek-ai/dsh-session-title/types": ["./packages/session/session-title/src/types.ts"],
