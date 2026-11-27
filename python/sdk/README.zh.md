@@ -6,6 +6,8 @@
 
 ```sh
 python -m pip install deepseek-harness-sdk
+# 可选：保留 glob 与 grep 工具（与 runtime 使用同一版本）
+python -m pip install deepseek-harness-search-bin
 ```
 
 ## 可选 Office 操作

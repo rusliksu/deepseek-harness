@@ -1,5 +1,7 @@
 # deepseek-harness-search-bin
 
+English | [中文](README.zh.md)
+
 Platform ripgrep binary for the [DeepSeek Harness Python SDK](../sdk/README.md) runtime.
 
 Install it beside `deepseek-harness-runtime-bin` at the same version:
