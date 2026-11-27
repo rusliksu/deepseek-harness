@@ -8,9 +8,11 @@ DeepSeek Harness Python SDK 的平台运行时 wheel 包。它把普通 `dsh` CL
 
 wheel 包会安装 `dsh` 控制台命令和 `deepseek_harness_runtime` Python 模块。`dsh` 将参数转发给内置可执行程序，并要求非空 `DSH_HOME`；它不会回退到 `~/.dsh`。
 
-生产可执行程序位于模块的 `runtime/` 目录，命名为 `deepseek-harness-sdk-runtime-<platform>-<arch>`；Windows 使用 `.exe` 后缀。Linux 与 macOS wheel 包含目标平台原生的 `-rg` 伴随程序，Windows 包含 `-rg.exe`，macOS 还包含 `node-pty` 使用的 `-spawn-helper`。已发布目标是 Linux x64、Linux arm64、macOS arm64、macOS x64 与 Windows x64。wheel 包标签必须与载荷严格匹配；不发布 Windows arm64 wheel 包。
+生产可执行程序位于模块的 `runtime/` 目录，命名为 `deepseek-harness-sdk-runtime-<platform>-<arch>`；Windows 使用 `.exe` 后缀，macOS 还包含 `node-pty` 使用的 `-spawn-helper`。已发布目标是 Linux x64、Linux arm64、macOS arm64、macOS x64 与 Windows x64。wheel 包标签必须与载荷严格匹配；不发布 Windows arm64 wheel 包。
 
 wheel 仅携带可执行程序、原生执行辅助程序，以及包含 `downloads.json` 的 `<platform>-<arch>/`。Office skills 内置于可执行程序中。CPython、创作库、独立 Node、pnpm 和完整 Office sidecar 均为可选下载资源。导入 Python 模块、启动 SDK profile 和处理 Office 文件都不会下载资源。
+
+ripgrep 二进制由独立分发包 `deepseek-harness-search-bin` 提供，因为它是本 wheel 超出 PyPI 单文件 100 MB 上限的原因。安装同一版本即可保留 `glob` 与 `grep` 工具；启动器通过 `DSH_RIPGREP_PATH` 把路径传给 runtime，环境中显式设置的值始终优先。未安装该 wheel 时 runtime 仍可正常启动，只有搜索功能会报告 ripgrep 不可用。
 
 使用前显式下载所需的任一种资源：
 

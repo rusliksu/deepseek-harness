@@ -6,6 +6,7 @@ Python subprocess SDK for driving DeepSeek Harness over newline-delimited JSON-R
 
 ```sh
 python -m pip install deepseek-harness-sdk
+python -m pip install deepseek-harness-search-bin
 ```
 
 ## Optional Office operations

@@ -6,6 +6,7 @@
 
 ```sh
 python -m pip install deepseek-harness-sdk
+python -m pip install deepseek-harness-search-bin
 ```
 
 ## 可选 Office 操作

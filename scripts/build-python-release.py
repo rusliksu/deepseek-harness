@@ -20,6 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SDK_DISTRIBUTION = "deepseek-harness-sdk"
 RUNTIME_DISTRIBUTION = "deepseek-harness-runtime-bin"
+SEARCH_DISTRIBUTION = "deepseek-harness-search-bin"
+SEARCH_BINARY_NAMES = {"win_amd64": "rg.exe"}
 PLATFORM_MANIFEST = ROOT / "python" / "sdk-runtime" / "platforms.json"
 
 
@@ -49,16 +51,32 @@ PLATFORMS = load_platforms()
 
 
 def runtime_filenames(executable_name: str) -> tuple[str, ...]:
-    """Return the exact platform payload names for one runtime executable."""
-    if executable_name.endswith(".exe"):
-        return (executable_name, f"{executable_name.removesuffix('.exe')}-rg.exe")
-    names = (executable_name, f"{executable_name}-rg")
-    return (*names, f"{executable_name}-spawn-helper") if "-macos-" in executable_name else names
+    """Return the payload names the runtime wheel ships beside the executable.
+
+    The ripgrep sidecar belongs to deepseek-harness-search-bin, so the runtime
+    wheel carries only the executable and the macOS spawn helper.
+    """
+    return (executable_name, f"{executable_name}-spawn-helper") if "-macos-" in executable_name else (executable_name,)
+
+
+def search_binary_name(platform_tag: str) -> str:
+    """Return the ripgrep file name one wheel platform tag ships."""
+    return SEARCH_BINARY_NAMES.get(platform_tag, "rg")
+
+
+def stage_search(destination: Path, version: str, executable: Path, platform_tag: str) -> None:
+    """Stage the standalone ripgrep distribution for one platform."""
+    copy_package(ROOT / "python" / "sdk-search", destination)
+    stage_license_files(destination, include_notices=True)
+    rewrite_version(destination / "pyproject.toml", version)
+    binary_dir = destination / "src" / "deepseek_harness_search" / "bin"
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(executable, binary_dir / search_binary_name(platform_tag))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package", choices=("sdk", "runtime"), required=True)
+    parser.add_argument("--package", choices=("sdk", "runtime", "search"), required=True)
     parser.add_argument(
         "--tag",
         help="optional python-v<repository-version> release tag; it must match package.json",
@@ -71,8 +89,8 @@ def main() -> None:
     validate_release_tag(args.tag, version)
     # Wheels carry the PEP 440 spelling; the tag keeps the repository spelling.
     wheel_version = pep440_version(version)
-    if args.package == "runtime" and (args.platform is None or args.runtime_exe is None):
-        parser.error("runtime builds require --platform and --runtime-exe")
+    if args.package in ("runtime", "search") and (args.platform is None or args.runtime_exe is None):
+        parser.error(f"{args.package} builds require --platform and --runtime-exe")
     if args.package == "sdk" and (args.platform is not None or args.runtime_exe is not None):
         parser.error("SDK builds do not accept --platform or --runtime-exe")
 
@@ -84,11 +102,16 @@ def main() -> None:
             stage_sdk(staging, wheel_version)
             environment = None
             expected = output_dir / f"deepseek_harness_sdk-{wheel_version}-py3-none-any.whl"
-        else:
+        elif args.package == "runtime":
             platform_tag, executable_name = PLATFORMS[args.platform]
             stage_runtime(staging, wheel_version, args.runtime_exe.resolve(), executable_name)
             environment = {"DSH_RUNTIME_PLATFORM_TAG": platform_tag}
             expected = output_dir / f"deepseek_harness_runtime_bin-{wheel_version}-py3-none-{platform_tag}.whl"
+        else:
+            platform_tag = PLATFORMS[args.platform][0]
+            stage_search(staging, wheel_version, args.runtime_exe.resolve(), platform_tag)
+            environment = {"DSH_RUNTIME_PLATFORM_TAG": platform_tag}
+            expected = output_dir / f"deepseek_harness_search_bin-{wheel_version}-py3-none-{platform_tag}.whl"
         command = ["uv", "build", "--wheel", "--out-dir", str(output_dir), str(staging)]
         subprocess.run(command, cwd=ROOT, env=None if environment is None else {**os.environ, **environment}, check=True)
     if not expected.is_file():
@@ -240,7 +263,7 @@ def verify_wheel(
     if wheel.stat().st_size > 100_000_000:
         raise RuntimeError(f"{wheel} is {wheel.stat().st_size} bytes and exceeds the PyPI single-file limit of 100000000 bytes")
     expected_tag = "py3-none-any" if platform is None else f"py3-none-{platform[0]}"
-    expected_distribution = SDK_DISTRIBUTION if package == "sdk" else RUNTIME_DISTRIBUTION
+    expected_distribution = {"sdk": SDK_DISTRIBUTION, "runtime": RUNTIME_DISTRIBUTION, "search": SEARCH_DISTRIBUTION}[package]
     dist_info = f"{expected_distribution.replace('-', '_')}-{version}.dist-info"
     with zipfile.ZipFile(wheel) as archive:
         wheel_metadata_path = f"{dist_info}/WHEEL"
@@ -286,6 +309,14 @@ def verify_wheel(
                     raise RuntimeError(f"{wheel} runtime executable lost its executable bit: {runtime_file}")
         elif runtime_payload:
             raise RuntimeError(f"SDK wheel unexpectedly contains runtime files: {runtime_payload}")
+        if package == "search":
+            assert platform is not None
+            binary = f"deepseek_harness_search/bin/{search_binary_name(platform[0])}"
+            if binary not in archive.namelist():
+                raise RuntimeError(f"{wheel} must carry {binary}")
+            mode = archive.getinfo(binary).external_attr >> 16
+            if platform[0] != "win_amd64" and mode & stat.S_IXUSR == 0:
+                raise RuntimeError(f"{wheel} ripgrep binary must be executable")
         if package == "sdk":
             requirements = metadata.get_all("Requires-Dist") or []
             expected_requirement = f"{RUNTIME_DISTRIBUTION}=={version}"

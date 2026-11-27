@@ -172,17 +172,45 @@ def test_current_platform_supports_macos_x64(monkeypatch: pytest.MonkeyPatch) ->
     assert runtime._current_platform_tag() == "macos-x64"
 
 
-def test_runtime_requires_ripgrep_sidecar(
+def test_runtime_starts_without_a_ripgrep_sidecar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
-    (runtime_dir / "deepseek-harness-sdk-runtime-linux-x64").touch()
+    executable = runtime_dir / "deepseek-harness-sdk-runtime-linux-x64"
+    executable.touch()
+    _resource_sidecars(executable)
     monkeypatch.setattr(runtime, "bundled_package_dir", lambda: tmp_path)
     monkeypatch.setattr(runtime, "_current_platform_tag", lambda: "linux-x64")
 
-    with pytest.raises(FileNotFoundError, match="ripgrep sidecar"):
-        runtime.bundled_runtime_path()
+    # deepseek-harness-search-bin ships ripgrep separately, so launching must not
+    # depend on the sidecar being present inside the runtime wheel.
+    assert runtime.bundled_runtime_path() == executable
+
+
+def test_search_override_uses_the_installed_search_wheel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "deepseek_harness_search"
+    (package / "bin").mkdir(parents=True)
+    binary = package / "bin" / ("rg.exe" if sys.platform == "win32" else "rg")
+    binary.write_text("")
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n\n\ndef ripgrep_path() -> Path:\n"
+        f"    return Path({str(binary)!r})\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    assert runtime.search_ripgrep_path() == binary
+    env: dict[str, str] = {}
+    runtime.apply_search_override(env)
+    assert env == {"DSH_RIPGREP_PATH": str(binary)}
+
+
+def test_search_override_defers_to_an_explicit_binary() -> None:
+    env = {"DSH_RIPGREP_PATH": "/usr/local/bin/rg"}
+    runtime.apply_search_override(env)
+    assert env == {"DSH_RIPGREP_PATH": "/usr/local/bin/rg"}
 
 
 def test_runtime_requires_complete_resource_sidecars(

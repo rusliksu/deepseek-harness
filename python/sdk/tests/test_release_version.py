@@ -132,6 +132,7 @@ def test_stage_runtime_copies_platform_payload(
     executable.write_bytes(b"runtime")
     executable.chmod(0o755)
     expected = {executable.name: b"runtime"}
+    # The ripgrep binary ships in deepseek-harness-search-bin, not in this wheel.
     ripgrep = (
         executable.with_name(f"{executable.stem}-rg.exe")
         if executable.suffix == ".exe"
@@ -139,7 +140,6 @@ def test_stage_runtime_copies_platform_payload(
     )
     ripgrep.write_bytes(b"ripgrep")
     ripgrep.chmod(0o755)
-    expected[ripgrep.name] = b"ripgrep"
     if with_helper:
         spawn_helper = Path(f"{executable}-spawn-helper")
         spawn_helper.write_bytes(b"helper")
